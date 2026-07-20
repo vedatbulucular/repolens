@@ -1,0 +1,15 @@
+.agents
+.git
+.github
+.tools
+.pnpm-store
+**/.next
+**/.venv
+**/node_modules
+apps/api
+apps/web/__tests__
+apps/web/coverage
+docs
+.env
+.env.*
+*.log
