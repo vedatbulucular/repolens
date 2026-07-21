@@ -1,8 +1,9 @@
 """Database operations for repository and analysis lifecycle records."""
 
+from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -64,6 +65,7 @@ async def mark_analysis_failed(
     session: AsyncSession,
     analysis_id: UUID,
     error_message: str,
+    error_code: str | None = None,
 ) -> None:
     """Mark a queued or processing analysis as failed when possible."""
     analysis = await session.get(Analysis, analysis_id)
@@ -76,5 +78,120 @@ async def mark_analysis_failed(
         analysis,
         AnalysisStatus.FAILED,
         error_message=error_message,
+        error_code=error_code,
     )
     await session.commit()
+
+
+async def claim_analysis_for_processing(
+    session: AsyncSession,
+    analysis_id: UUID,
+    processing_token: str,
+) -> Analysis | None:
+    """Atomically claim an analysis or resume its same Celery delivery."""
+    now = datetime.now(UTC)
+    queued_claim = await session.execute(
+        update(Analysis)
+        .where(
+            Analysis.id == analysis_id,
+            Analysis.status == AnalysisStatus.QUEUED,
+        )
+        .values(
+            status=AnalysisStatus.PROCESSING,
+            started_at=now,
+            completed_at=None,
+            error_message=None,
+            error_code=None,
+            processing_token=processing_token,
+        )
+        .returning(Analysis.id)
+    )
+    claimed_id = queued_claim.scalar_one_or_none()
+    if claimed_id is not None:
+        await session.commit()
+        return await get_analysis_record(session, analysis_id)
+
+    analysis = await get_analysis_record(session, analysis_id)
+    if analysis is None or analysis.status in Analysis.terminal_statuses:
+        await session.rollback()
+        return None
+    if analysis.processing_token == processing_token:
+        await session.commit()
+        return analysis
+    if analysis.processing_token is not None:
+        await session.rollback()
+        return None
+
+    legacy_claim = await session.execute(
+        update(Analysis)
+        .where(
+            Analysis.id == analysis_id,
+            Analysis.status == AnalysisStatus.PROCESSING,
+            Analysis.processing_token.is_(None),
+        )
+        .values(processing_token=processing_token)
+        .returning(Analysis.id)
+    )
+    claimed_id = legacy_claim.scalar_one_or_none()
+    if claimed_id is None:
+        await session.rollback()
+        return None
+    await session.commit()
+    return await get_analysis_record(session, analysis_id)
+
+
+async def complete_claimed_analysis(
+    session: AsyncSession,
+    analysis_id: UUID,
+    processing_token: str,
+) -> bool:
+    """Complete only the processing analysis still owned by this token."""
+    result = await session.execute(
+        update(Analysis)
+        .where(
+            Analysis.id == analysis_id,
+            Analysis.status == AnalysisStatus.PROCESSING,
+            Analysis.processing_token == processing_token,
+        )
+        .values(
+            status=AnalysisStatus.COMPLETED,
+            completed_at=datetime.now(UTC),
+            error_message=None,
+            error_code=None,
+            processing_token=None,
+        )
+        .returning(Analysis.id)
+    )
+    updated = result.scalar_one_or_none() is not None
+    await session.commit()
+    return updated
+
+
+async def fail_claimed_analysis(
+    session: AsyncSession,
+    analysis_id: UUID,
+    processing_token: str,
+    *,
+    error_code: str,
+    error_message: str,
+) -> bool:
+    """Fail only the processing analysis still owned by this token."""
+    result = await session.execute(
+        update(Analysis)
+        .where(
+            Analysis.id == analysis_id,
+            Analysis.status == AnalysisStatus.PROCESSING,
+            Analysis.processing_token == processing_token,
+        )
+        .values(
+            status=AnalysisStatus.FAILED,
+            completed_at=datetime.now(UTC),
+            error_message=error_message,
+            error_code=error_code,
+            processing_token=None,
+        )
+        .returning(Analysis.id)
+    )
+    updated = result.scalar_one_or_none() is not None
+    await session.commit()
+    return updated

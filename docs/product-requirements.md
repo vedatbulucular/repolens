@@ -8,9 +8,9 @@ RepoLens is not a wrapper that sends an entire codebase to an AI model. Determin
 
 ## Current delivery scope
 
-Stage 1 adds a durable analysis lifecycle to the Stage 0 foundation. It accepts and canonicalizes supported public GitHub repository URLs, persists repository identity and job state, exposes create and status endpoints, and runs a deterministic mock Celery job.
+Stage 2A adds bounded, temporary repository acquisition to the durable Stage 1 lifecycle. It accepts and canonicalizes supported public GitHub repository URLs, persists repository identity and job state, and lets the worker shallow-clone only the stored canonical URL under strict process and filesystem controls.
 
-Stage 1 does not contact GitHub, download or clone repositories, inspect source, parse files, score projects, or invoke AI. The web repository URL field and action button remain intentionally non-functional; only the backend lifecycle API is implemented.
+Stage 2A contacts GitHub only through a hardened HTTPS Git clone. It does not inventory source, detect technologies, parse files, score projects, persist source, or invoke AI. The web repository URL field and action button remain intentionally non-functional; only the backend lifecycle and acquisition flow are implemented.
 
 ## Target users
 
@@ -123,7 +123,7 @@ These exclusions are product boundaries, not implied deficiencies. Adding one re
 ## Assumptions
 
 - The first release analyzes only accessible public repositories hosted on `github.com`.
-- Basic acquisition should work without a token or with a low-privilege optional token, subject to documented rate limits.
+- Basic acquisition works without a token for accessible public repositories and never prompts for credentials.
 - Analysis can exceed an interactive HTTP timeout, so queue-backed processing is required.
 - Repository and analysis limits will be public, explicit, and configurable.
 - PostgreSQL stores analysis metadata and derived reports; Redis supports transient job transport.

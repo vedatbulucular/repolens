@@ -73,7 +73,7 @@ services:
   worker:
     build:
       context: ./apps/api
-      target: development
+      target: worker-development
     command:
       - celery
       - --app
@@ -86,9 +86,19 @@ services:
     environment:
       REPOLENS_API_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-repolens}:${POSTGRES_PASSWORD:-repolens-local}@postgres:5432/${POSTGRES_DB:-repolens}
       REPOLENS_API_REDIS_URL: redis://redis:6379/0
+      REPOLENS_API_ACQUISITION_TIMEOUT_SECONDS: ${REPOLENS_API_ACQUISITION_TIMEOUT_SECONDS:-60}
+      REPOLENS_API_MAX_REPOSITORY_BYTES: ${REPOLENS_API_MAX_REPOSITORY_BYTES:-104857600}
+      REPOLENS_API_MAX_WORKSPACE_BYTES: ${REPOLENS_API_MAX_WORKSPACE_BYTES:-268435456}
+      REPOLENS_API_MAX_FILE_COUNT: ${REPOLENS_API_MAX_FILE_COUNT:-20000}
+      REPOLENS_API_MAX_FILE_BYTES: ${REPOLENS_API_MAX_FILE_BYTES:-5242880}
+      REPOLENS_API_MAX_PATH_LENGTH: ${REPOLENS_API_MAX_PATH_LENGTH:-512}
+      REPOLENS_API_MAX_PATH_DEPTH: ${REPOLENS_API_MAX_PATH_DEPTH:-40}
+      REPOLENS_API_WORKSPACE_ROOT: ${REPOLENS_API_WORKSPACE_ROOT:-/tmp/repolens-workspaces}
     volumes:
       - ./apps/api:/app
     user: "65534:65534"
+    tmpfs:
+      - /tmp/repolens-workspaces:size=671088640,mode=0700,uid=65534,gid=65534
     depends_on:
       postgres:
         condition: service_healthy
@@ -98,7 +108,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "celery --app repolens_api.celery_app:celery_app inspect ping --destination celery@$${HOSTNAME} --timeout 5",
+          "git --version >/dev/null 2>&1 && celery --app repolens_api.celery_app:celery_app inspect registered --destination celery@$${HOSTNAME} --timeout 5 | grep --quiet repolens.process_analysis",
         ]
       interval: 15s
       timeout: 10s

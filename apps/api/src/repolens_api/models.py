@@ -76,5 +76,7 @@ class Analysis(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    processing_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     repository: Mapped[Repository] = relationship(back_populates="analyses")

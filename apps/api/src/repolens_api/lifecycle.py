@@ -21,6 +21,7 @@ def transition_analysis(
     target: AnalysisStatus,
     *,
     error_message: str | None = None,
+    error_code: str | None = None,
     occurred_at: datetime | None = None,
 ) -> None:
     """Apply one allowed lifecycle transition and its timestamps."""
@@ -33,9 +34,14 @@ def transition_analysis(
     if target is AnalysisStatus.PROCESSING:
         analysis.started_at = timestamp
         analysis.error_message = None
+        analysis.error_code = None
     elif target is AnalysisStatus.COMPLETED:
         analysis.completed_at = timestamp
         analysis.error_message = None
+        analysis.error_code = None
+        analysis.processing_token = None
     elif target is AnalysisStatus.FAILED:
         analysis.completed_at = timestamp
         analysis.error_message = error_message or "Analysis processing failed."
+        analysis.error_code = error_code
+        analysis.processing_token = None

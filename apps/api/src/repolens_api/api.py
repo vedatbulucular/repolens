@@ -53,6 +53,7 @@ def _analysis_response(analysis: Analysis) -> AnalysisResponse:
         started_at=_optional_as_utc(analysis.started_at),
         completed_at=_optional_as_utc(analysis.completed_at),
         error_message=analysis.error_message,
+        error_code=analysis.error_code,
         repository=RepositoryResponse.model_validate(analysis.repository),
     )
 

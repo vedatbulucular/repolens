@@ -75,7 +75,9 @@ docker compose run --rm api alembic upgrade head
 docker compose up
 ```
 
-Stop the containers with `docker compose down`. PostgreSQL is the Stage 1 system of record, and Redis is the Celery broker. Neither service contains or acquires repository source.
+Stop the containers with `docker compose down`. PostgreSQL is the system of record and Redis is the Celery broker. Repository source exists only in the worker's bounded temporary workspace and must never be mounted into PostgreSQL, Redis, the API, or the host.
+
+The native Stage 2A worker also requires Git and trusted CA certificates. Never change acquisition tests to execute a fixture repository's hooks, package scripts, binaries, tests, builds, or entry points. Automated tests must use fake process runners or trusted local fixtures and must not depend on GitHub or another external network service.
 
 ## Branches
 
@@ -126,6 +128,8 @@ docker compose config
 ```
 
 Behavior changes require new or updated tests. Do not remove or weaken a valid failing test to obtain a green result. If a required check cannot run in your environment, state the command and reason in the pull request.
+
+Acquisition changes must additionally cover timeout, cleanup, boundary limits, canonical URL use, safe errors, and path or link behavior. Test assertions must not log source content, Git output, credentials, or machine-specific absolute paths.
 
 ## Dependencies
 
