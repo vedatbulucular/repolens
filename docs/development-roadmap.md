@@ -37,7 +37,7 @@ No repository analysis, acquisition, URL validation, persistence models, migrati
 
 ## Stage 1 — Analysis lifecycle
 
-**Status:** Current milestone
+**Status:** Complete
 
 ### Scope
 
@@ -57,6 +57,8 @@ No repository analysis, acquisition, URL validation, persistence models, migrati
 
 ## Stage 2 — Safe repository acquisition
 
+**Status:** Stage 2A implemented; Stage 2B hardening deferred
+
 ### Scope
 
 - Acquire public repository snapshots using the approved shallow-clone or archive strategy.
@@ -64,6 +66,8 @@ No repository analysis, acquisition, URL validation, persistence models, migrati
 - Enforce repository-size, file-count, file-size, redirect, and timeout limits.
 - Prevent symbolic-link and path traversal outside the workspace.
 - Classify acquisition failures without leaking source or credentials.
+
+Stage 2A uses a depth-one, single-branch Git clone and rejects all symbolic links. The source tree is scanned only to enforce safety limits; inventory and technology detection remain in Stage 3. Stage 2B may add a read-only root filesystem, dropped capabilities, explicit PID and memory limits, and stronger deployment-level egress controls.
 
 ### Acceptance criteria
 

@@ -35,7 +35,7 @@ flowchart LR
     K --> P
 ```
 
-The Next.js page still has a repository URL field and disabled action button; it does not call the API. FastAPI exposes `GET /health`, `POST /api/v1/analyses`, and `GET /api/v1/analyses/{analysis_id}`. The API accepts only canonicalizable public HTTPS GitHub repository URLs, stores repository identities and analysis lifecycle records, and publishes mock work to Redis. The worker performs no network or repository work; it only persists valid lifecycle transitions.
+The Next.js page still has a repository URL field and disabled action button; it does not call the API. FastAPI exposes `GET /health`, `POST /api/v1/analyses`, and `GET /api/v1/analyses/{analysis_id}`. The API accepts only canonicalizable public HTTPS GitHub repository URLs, stores repository identities and analysis lifecycle records, and publishes acquisition work to Redis. The worker shallow-clones only the stored canonical URL, enforces process and filesystem limits, removes the temporary source, and persists valid lifecycle transitions.
 
 Alembic owns the PostgreSQL schema. SQLAlchemy's asynchronous engine and sessions are shared by the API and worker. Redis is transport only and is not a system of record.
 
@@ -108,18 +108,20 @@ Stage 1 implements steps 1-3 and a mock terminal transition. Steps 4-11 remain p
 1. The user submits a public GitHub repository URL.
 2. The API validates and canonicalizes the URL, then records an analysis request.
 3. The API enqueues an idempotent background job and returns an analysis identifier.
-4. In Stage 1, a worker performs no repository work and marks the record complete. A future worker will acquire a shallow repository snapshot in an isolated temporary directory.
-5. The worker builds a bounded inventory and skips unsafe, binary, excluded, or oversized content.
-6. Detection and parsing modules derive technology, documentation, structure, and symbol facts.
-7. Rules convert those facts into evidence-backed findings.
-8. The scoring module calculates versioned category and overall scores.
-9. The report builder persists derived metadata and export content, not the repository source.
-10. Cleanup removes the temporary workspace on success, failure, cancellation, or timeout.
-11. The web application polls the API and renders the completed versioned report.
+4. The Celery worker atomically claims the analysis using its delivery identifier, reloads the canonical URL from PostgreSQL, and acquires a shallow repository snapshot in an isolated temporary directory.
+5. Acquisition disables repository hooks, prompts, credential helpers, submodules, LFS smudging, unsafe protocols, and redirects; time and workspace growth are bounded throughout the Git process.
+6. A security-only filesystem pass rejects limit violations, symbolic links, unsafe paths, and special files without producing or storing an inventory.
+7. Git metadata and the complete workspace are removed before the analysis is marked complete.
+8. A future worker stage will build a bounded inventory and skip unsafe, binary, excluded, or oversized content.
+9. Future detection and parsing modules derive technology, documentation, structure, and symbol facts.
+10. Rules convert those facts into evidence-backed findings.
+11. The scoring module calculates versioned category and overall scores.
+12. The report builder persists derived metadata and export content, not repository source.
+13. The web application polls the API and renders the completed versioned report.
 
 ## Data ownership and persistence
 
-Stage 1 stores canonical repository identity and analysis lifecycle metadata in `repositories` and `analyses`. Planned MVP persistence will later add findings, scores, and a versioned report. Source files and full repository snapshots are not stored as product records.
+Stage 2A stores canonical repository identity, analysis lifecycle metadata, a safe acquisition error code, and an internal processing-delivery token in `repositories` and `analyses`. Planned MVP persistence will later add findings, scores, and a versioned report. Source files, file inventories, workspace paths, Git output, and repository snapshots are not stored as product records.
 
 Alembic migrations version the PostgreSQL schema. PostgreSQL is the system of record; Redis is used only for queue transport and transient coordination.
 
@@ -141,7 +143,7 @@ The following rules apply now and to every future milestone:
 - `apps/web` runs as a Next.js development server on port 3000.
 - `apps/api` runs as a FastAPI/Uvicorn development server on port 8000.
 - Docker Compose runs PostgreSQL and Redis with health checks and starts the API and worker only after both dependencies are healthy.
-- Source mounts and reload commands support local iteration; Stage 1 does not contain production deployment optimization.
+- Source mounts and reload commands support local iteration. The worker image alone includes Git and uses a non-root user plus a bounded tmpfs for repository workspaces.
 - GitHub Actions independently verifies backend formatting, linting, typing, and tests, plus frontend linting, typing, tests, and production build.
 
 Commands and local prerequisites are documented in the repository README. Architecture changes that alter component ownership, deployment boundaries, data retention, or safety guarantees require an ADR.

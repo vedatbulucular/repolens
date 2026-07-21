@@ -41,6 +41,7 @@ class AnalysisResponse(BaseModel):
     started_at: AwareDatetime | None
     completed_at: AwareDatetime | None
     error_message: str | None
+    error_code: str | None
     repository: RepositoryResponse
 
 

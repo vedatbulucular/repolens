@@ -28,6 +28,7 @@ def test_create_analysis_returns_queued_record(
     assert response.status_code == 202
     body = response.json()
     assert body["status"] == "queued"
+    assert body["error_code"] is None
     assert body["repository"]["canonical_url"] == ("https://github.com/openai/openai-python")
     assert body["repository"]["owner"] == "openai"
     assert body["repository"]["name"] == "openai-python"
@@ -92,6 +93,33 @@ def test_get_analysis_returns_created_record(api_client: TestClient) -> None:
     assert response.json() == created.json()
 
 
+def test_get_analysis_returns_machine_readable_acquisition_error(
+    api_client: TestClient,
+    test_sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    created = api_client.post(
+        "/api/v1/analyses",
+        json={"repository_url": "https://github.com/openai/openai-python"},
+    )
+    analysis_id = UUID(created.json()["id"])
+
+    async def fail_analysis() -> None:
+        async with test_sessions() as session:
+            analysis = await session.get(Analysis, analysis_id)
+            assert analysis is not None
+            analysis.status = AnalysisStatus.FAILED
+            analysis.error_code = "repository_unavailable"
+            analysis.error_message = "The public repository could not be acquired."
+            await session.commit()
+
+    asyncio.run(fail_analysis())
+    response = api_client.get(f"/api/v1/analyses/{analysis_id}")
+
+    assert response.status_code == 200
+    assert response.json()["error_code"] == "repository_unavailable"
+    assert response.json()["error_message"] == "The public repository could not be acquired."
+
+
 def test_get_analysis_returns_machine_readable_not_found(api_client: TestClient) -> None:
     response = api_client.get(f"/api/v1/analyses/{uuid4()}")
 
@@ -131,6 +159,7 @@ def test_queue_failure_returns_safe_error_and_marks_analysis_failed(
     assert persisted.started_at is None
     assert persisted.completed_at is not None
     assert persisted.error_message == "Analysis queue dispatch failed."
+    assert persisted.error_code is None
 
 
 def test_database_failure_returns_safe_error(
@@ -175,7 +204,8 @@ def test_invalid_analysis_uuid_uses_problem_details(api_client: TestClient) -> N
 
 
 def test_openapi_documents_problem_response_media_types() -> None:
-    paths = app.openapi()["paths"]
+    openapi = app.openapi()
+    paths = openapi["paths"]
     expected_responses = {
         ("/api/v1/analyses", "post"): {"422", "503"},
         ("/api/v1/analyses/{analysis_id}", "get"): {"404", "422", "503"},
@@ -187,3 +217,7 @@ def test_openapi_documents_problem_response_media_types() -> None:
             content = responses[status_code]["content"]
             assert set(content) == {"application/problem+json"}
             assert content["application/problem+json"]["schema"]["title"] == ("ProblemDetail")
+
+    analysis_properties = openapi["components"]["schemas"]["AnalysisResponse"]["properties"]
+    assert "error_code" in analysis_properties
+    assert "processing_token" not in analysis_properties

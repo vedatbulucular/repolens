@@ -14,9 +14,9 @@ RepoLens is intended to help students, junior developers, open-source maintainer
 
 ## Development status
 
-RepoLens is currently at **Stage 1: analysis lifecycle**. The repository contains the Stage 0 foundation plus strict public GitHub URL canonicalization, asynchronous PostgreSQL persistence, versioned analysis endpoints, Alembic migrations, and a Celery worker that exercises the job lifecycle with deterministic mock work.
+RepoLens is currently at **Stage 2A: safe repository acquisition**. The repository contains the Stage 0 foundation, the Stage 1 analysis lifecycle, and a Celery worker that acquires a bounded shallow snapshot of a stored canonical public GitHub repository URL in a temporary workspace.
 
-Repository acquisition and analysis are **not implemented yet**. The landing-page URL field and **Analyze Repository** button remain intentionally non-functional. The Stage 1 worker never contacts GitHub, clones or downloads source, parses files, or invokes AI; it only moves a stored analysis through `queued`, `processing`, and `completed` states. Authentication and a functional dashboard are also outside this stage.
+Repository content analysis is **not implemented yet**. The worker does not build an inventory, detect technologies, parse files, score a project, or invoke AI. It never runs repository hooks, scripts, dependencies, tests, builds, or entry points. The acquired source and Git metadata are removed before the task records completion. The landing-page URL field and **Analyze Repository** button remain intentionally non-functional.
 
 ## Technology stack
 
@@ -70,7 +70,7 @@ For development without Docker:
 - Python 3.12 or later
 - [uv](https://docs.astral.sh/uv/)
 
-PostgreSQL and Redis are required for the Stage 1 API and worker. The web landing page can still run independently.
+PostgreSQL, Redis, Git, and trusted CA certificates are required for the native API worker. The Docker worker image includes Git and CA certificates; the API image does not add Git. The web landing page can still run independently.
 
 ## Run with Docker Compose
 
@@ -145,7 +145,7 @@ In another terminal, start the API development server:
 pnpm dev:api
 ```
 
-In another terminal, start the Celery worker:
+In another terminal, start the Celery worker. Native workers use an operating-system temporary directory by default; set an absolute `REPOLENS_API_WORKSPACE_ROOT` when an explicit location is required:
 
 ```bash
 uv --directory apps/api run celery --app repolens_api.celery_app:celery_app worker --loglevel info
@@ -161,7 +161,7 @@ curl -X POST http://localhost:8000/api/v1/analyses \
   -d '{"repository_url":"https://github.com/openai/openai-python.git"}'
 ```
 
-Read its current state using the returned identifier:
+Read its current state, including a safe `error_code` when acquisition fails, using the returned identifier:
 
 ```bash
 curl http://localhost:8000/api/v1/analyses/ANALYSIS_ID
@@ -170,6 +170,10 @@ curl http://localhost:8000/api/v1/analyses/ANALYSIS_ID
 Only exact `https://github.com/{owner}/{repository}` URLs are accepted, with an optional trailing slash or `.git` suffix. Query strings, fragments, credentials, ports, extra path segments, SSH syntax, IP addresses, localhost, non-HTTPS schemes, and other hosts are rejected. Accepted values are stored as `https://github.com/{owner}/{repository}`.
 
 API errors use `application/problem+json`. A malformed analysis UUID returns `422` with type `invalid_request`; a well-formed UUID with no corresponding record returns `404` with type `analysis_not_found`.
+
+The worker uses only the canonical URL loaded from PostgreSQL. It performs a depth-one, single-branch, tags-free HTTPS clone with prompts, credential helpers, submodule recursion, LFS smudging, repository hooks, unsafe protocols, and HTTP redirects disabled. Source is validated only against the configured security limits; no file inventory is produced or stored.
+
+The default acquisition limits are 60 seconds, 100 MiB of checked-out regular files, 256 MiB for the complete temporary workspace, 20,000 filesystem entries, 5 MiB per file, a 512-character relative path, and a maximum path depth of 40. The Docker worker stores workspaces in a 640 MiB tmpfs at `/tmp/repolens-workspaces`. Configure the corresponding `REPOLENS_API_*` variables documented in `.env.example` to change these bounds.
 
 ## Quality checks
 
@@ -196,8 +200,8 @@ docker compose config
 ## MVP roadmap
 
 1. **Stage 0 — Foundation (complete):** monorepo scaffold, health endpoint, landing page, tests, Compose, CI, and documentation.
-2. **Stage 1 — Analysis lifecycle (current):** canonical public GitHub URLs, analysis records, status API, and queued mock jobs.
-3. **Stage 2 — Safe acquisition:** bounded temporary repository acquisition with guaranteed cleanup.
+2. **Stage 1 — Analysis lifecycle (complete):** canonical public GitHub URLs, analysis records, status API, and queued jobs.
+3. **Stage 2 — Safe acquisition (Stage 2A current):** bounded shallow clone, temporary workspaces, safe failures, and guaranteed cleanup. Additional container hardening remains for Stage 2B.
 4. **Stage 3 — Inventory and detection:** file inventory, language detection, documentation signals, and exclusions.
 5. **Stage 4 — Source parsing:** fault-tolerant Python and TypeScript symbol extraction with Tree-sitter.
 6. **Stage 5 — Rules and scoring:** evidence-backed findings and versioned deterministic scores.
@@ -209,7 +213,7 @@ See the [development roadmap](docs/development-roadmap.md) for milestone boundar
 
 ## Security principle
 
-**RepoLens must never execute code or scripts from an analyzed repository.** Untrusted repositories are treated as data only: no dependency installation, build command, test command, hook, or application entry point may be run. Future acquisition and parsing work must also enforce explicit limits, avoid following unsafe links, store source only temporarily, and remove it after analysis.
+**RepoLens must never execute code or scripts from an analyzed repository.** Untrusted repositories are treated as data only: no dependency installation, build command, test command, hook, or application entry point may be run. Stage 2A enforces explicit acquisition limits, rejects all symbolic links, stores source only temporarily, and removes it before the task reaches a terminal state.
 
 ## Contributing
 
