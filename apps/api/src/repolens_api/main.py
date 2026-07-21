@@ -3,6 +3,8 @@
 from fastapi import FastAPI
 
 from repolens_api import APP_NAME, SERVICE_NAME, __version__
+from repolens_api.api import router as api_router
+from repolens_api.errors import install_error_handlers
 from repolens_api.schemas import HealthResponse
 from repolens_api.settings import get_settings
 
@@ -13,6 +15,8 @@ app = FastAPI(
     version=__version__,
     debug=settings.debug,
 )
+install_error_handlers(app)
+app.include_router(api_router)
 
 
 @app.get(
