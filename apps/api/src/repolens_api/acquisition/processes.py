@@ -10,6 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
+_windows_process_group_flag = subprocess.__dict__.get("CREATE_NEW_PROCESS_GROUP", 0)
+WINDOWS_PROCESS_GROUP_FLAG = (
+    _windows_process_group_flag if isinstance(_windows_process_group_flag, int) else 0
+)
+
 
 class ProcessTimedOut(Exception):
     """Raised when a child process exceeds its deadline."""
@@ -86,7 +91,7 @@ class SubprocessRunner:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
             start_new_session=os.name == "posix",
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+            creationflags=WINDOWS_PROCESS_GROUP_FLAG if os.name == "nt" else 0,
         )
         communication = asyncio.create_task(process.communicate())
         loop = asyncio.get_running_loop()

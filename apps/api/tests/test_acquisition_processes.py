@@ -1,6 +1,8 @@
 """Tests for shell-free process timeout and workspace monitoring."""
 
 import asyncio
+import os
+import subprocess
 import sys
 from pathlib import Path
 from time import monotonic
@@ -62,6 +64,10 @@ def test_process_runner_uses_exec_without_a_shell(
     assert "shell" not in captured_options
     assert captured_options["stdout"] is asyncio.subprocess.DEVNULL
     assert captured_options["stderr"] is asyncio.subprocess.DEVNULL
+    expected_windows_flag = subprocess.__dict__.get("CREATE_NEW_PROCESS_GROUP", 0)
+    assert isinstance(expected_windows_flag, int)
+    assert captured_options["creationflags"] == (expected_windows_flag if os.name == "nt" else 0)
+    assert captured_options["start_new_session"] is (os.name == "posix")
 
 
 def test_process_runner_times_out_without_waiting_for_real_limit(tmp_path: Path) -> None:
