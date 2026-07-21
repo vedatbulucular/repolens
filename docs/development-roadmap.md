@@ -8,7 +8,7 @@ The invariant across all stages is that RepoLens never executes code or scripts 
 
 ## Stage 0 — Architecture decisions and project foundation
 
-**Status:** Current milestone
+**Status:** Complete
 
 ### Scope
 
@@ -37,13 +37,15 @@ No repository analysis, acquisition, URL validation, persistence models, migrati
 
 ## Stage 1 — Analysis lifecycle
 
+**Status:** Current milestone
+
 ### Scope
 
 - Define the supported public GitHub URL policy and canonicalization rules.
 - Add the first repository and analysis persistence models with migrations.
 - Add endpoints to create an analysis and read its state.
 - Introduce Redis and Celery with an idempotent mock analysis job.
-- Define and test queued, running, completed, and failed transitions.
+- Define and test queued, processing, completed, and failed transitions.
 
 ### Acceptance criteria
 

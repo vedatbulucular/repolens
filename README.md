@@ -14,9 +14,9 @@ RepoLens is intended to help students, junior developers, open-source maintainer
 
 ## Development status
 
-RepoLens is currently at **Stage 0: architecture decisions and project foundation**. The repository contains a minimal Next.js landing page, a FastAPI health endpoint, local development containers, quality tooling, CI, and foundational documentation.
+RepoLens is currently at **Stage 1: analysis lifecycle**. The repository contains the Stage 0 foundation plus strict public GitHub URL canonicalization, asynchronous PostgreSQL persistence, versioned analysis endpoints, Alembic migrations, and a Celery worker that exercises the job lifecycle with deterministic mock work.
 
-Repository analysis is **not implemented yet**. The URL field and **Analyze Repository** button are intentionally non-functional, and the API has no GitHub integration, persistence models, background jobs, authentication, or analysis engine. PostgreSQL and Redis are provisioned by Docker Compose for future milestones but are not used by the applications in Stage 0.
+Repository acquisition and analysis are **not implemented yet**. The landing-page URL field and **Analyze Repository** button remain intentionally non-functional. The Stage 1 worker never contacts GitHub, clones or downloads source, parses files, or invokes AI; it only moves a stored analysis through `queued`, `processing`, and `completed` states. Authentication and a functional dashboard are also outside this stage.
 
 ## Technology stack
 
@@ -24,14 +24,14 @@ Repository analysis is **not implemented yet**. The URL field and **Analyze Repo
 | --- | --- |
 | Web | Next.js, React, TypeScript, Tailwind CSS |
 | Web quality | ESLint, TypeScript, Vitest, Testing Library |
-| API | FastAPI, Python, Pydantic Settings |
+| API | FastAPI, Python, Pydantic Settings, SQLAlchemy, Alembic |
 | API quality | Ruff, mypy, pytest |
 | Package management | pnpm for the web app, uv for the API |
-| Future persistence and jobs | PostgreSQL, Redis, and Celery |
+| Persistence and jobs | PostgreSQL, Redis, and Celery |
 | Local infrastructure | Docker Compose |
 | Continuous integration | GitHub Actions |
 
-Tree-sitter, Celery, database models, and repository acquisition are planned technologies; they are not part of the current implementation.
+Tree-sitter, repository acquisition, deterministic repository inspection, scoring, and AI explanations remain planned; they are not part of the current implementation.
 
 ## Repository structure
 
@@ -47,7 +47,7 @@ repolens/
 |   `-- product-requirements.md # MVP scope and product constraints
 |-- .github/workflows/          # Continuous integration
 |-- .env.example                # Documented local defaults; no secrets
-|-- compose.yaml                # Web, API, PostgreSQL, and Redis services
+|-- compose.yaml                # Web, API, worker, PostgreSQL, and Redis services
 |-- AGENTS.md                   # Persistent repository instructions
 |-- CONTRIBUTING.md             # Contribution workflow
 `-- README.md
@@ -70,7 +70,7 @@ For development without Docker:
 - Python 3.12 or later
 - [uv](https://docs.astral.sh/uv/)
 
-PostgreSQL and Redis are not required when running the Stage 0 web and API applications directly because neither application connects to them yet.
+PostgreSQL and Redis are required for the Stage 1 API and worker. The web landing page can still run independently.
 
 ## Run with Docker Compose
 
@@ -86,13 +86,28 @@ cp .env.example .env
 Copy-Item .env.example .env
 ```
 
-Build and start all services from the repository root:
+Build the images and start the infrastructure from the repository root:
 
 ```bash
-docker compose up --build
+docker compose build
+docker compose up -d postgres redis
 ```
 
-The web application is available at `http://localhost:3000`. The API health endpoint is available at `http://localhost:8000/health`, and interactive API documentation is available at `http://localhost:8000/docs`.
+Apply the database migration before starting the API and worker:
+
+```bash
+docker compose run --rm api alembic upgrade head
+```
+
+Migrations are not applied automatically. Run this command after a fresh setup and whenever the checked-in migration revision changes.
+
+Start all services:
+
+```bash
+docker compose up
+```
+
+The web application is available at `http://localhost:3000`. The API health endpoint is available at `http://localhost:8000/health`, and interactive API documentation is available at `http://localhost:8000/docs`. The worker has no public port.
 
 Stop the environment with:
 
@@ -111,6 +126,13 @@ pnpm install --frozen-lockfile
 uv --directory apps/api sync --locked --all-groups
 ```
 
+Start PostgreSQL and Redis, then migrate the local database:
+
+```bash
+docker compose up -d postgres redis
+uv --directory apps/api run alembic upgrade head
+```
+
 Start the web development server:
 
 ```bash
@@ -122,6 +144,32 @@ In another terminal, start the API development server:
 ```bash
 pnpm dev:api
 ```
+
+In another terminal, start the Celery worker:
+
+```bash
+uv --directory apps/api run celery --app repolens_api.celery_app:celery_app worker --loglevel info
+```
+
+## Analysis lifecycle API
+
+Create a queued analysis for a supported public GitHub URL:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/analyses \
+  -H "Content-Type: application/json" \
+  -d '{"repository_url":"https://github.com/openai/openai-python.git"}'
+```
+
+Read its current state using the returned identifier:
+
+```bash
+curl http://localhost:8000/api/v1/analyses/ANALYSIS_ID
+```
+
+Only exact `https://github.com/{owner}/{repository}` URLs are accepted, with an optional trailing slash or `.git` suffix. Query strings, fragments, credentials, ports, extra path segments, SSH syntax, IP addresses, localhost, non-HTTPS schemes, and other hosts are rejected. Accepted values are stored as `https://github.com/{owner}/{repository}`.
+
+API errors use `application/problem+json`. A malformed analysis UUID returns `422` with type `invalid_request`; a well-formed UUID with no corresponding record returns `404` with type `analysis_not_found`.
 
 ## Quality checks
 
@@ -147,8 +195,8 @@ docker compose config
 
 ## MVP roadmap
 
-1. **Stage 0 — Foundation:** monorepo scaffold, health endpoint, landing page, tests, Compose, CI, and documentation.
-2. **Stage 1 — Analysis lifecycle:** canonical public GitHub URLs, analysis records, status API, and queued mock jobs.
+1. **Stage 0 — Foundation (complete):** monorepo scaffold, health endpoint, landing page, tests, Compose, CI, and documentation.
+2. **Stage 1 — Analysis lifecycle (current):** canonical public GitHub URLs, analysis records, status API, and queued mock jobs.
 3. **Stage 2 — Safe acquisition:** bounded temporary repository acquisition with guaranteed cleanup.
 4. **Stage 3 — Inventory and detection:** file inventory, language detection, documentation signals, and exclusions.
 5. **Stage 4 — Source parsing:** fault-tolerant Python and TypeScript symbol extraction with Tree-sitter.

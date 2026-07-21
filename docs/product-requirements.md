@@ -8,9 +8,9 @@ RepoLens is not a wrapper that sends an entire codebase to an AI model. Determin
 
 ## Current delivery scope
 
-Stage 0 establishes a runnable and testable project foundation. It includes a professional but non-functional landing page, a typed API health endpoint, development infrastructure, continuous integration, and documentation.
+Stage 1 adds a durable analysis lifecycle to the Stage 0 foundation. It accepts and canonicalizes supported public GitHub repository URLs, persists repository identity and job state, exposes create and status endpoints, and runs a deterministic mock Celery job.
 
-Stage 0 does not accept, download, inspect, parse, score, or persist GitHub repositories. Its repository URL field and action button communicate the product direction but intentionally perform no action.
+Stage 1 does not contact GitHub, download or clone repositories, inspect source, parse files, score projects, or invoke AI. The web repository URL field and action button remain intentionally non-functional; only the backend lifecycle API is implemented.
 
 ## Target users
 

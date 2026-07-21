@@ -2,11 +2,11 @@
 
 ## Document status
 
-- **Current milestone:** Stage 0 — architecture decisions and project foundation
-- **Last updated:** 2026-07-20
+- **Current milestone:** Stage 1 — analysis lifecycle
+- **Last updated:** 2026-07-21
 - **Architecture style:** monorepo with a modular-monolith backend and a separate web application
 
-This document distinguishes the code that exists in Stage 0 from the target MVP architecture. A component described as planned must not be treated as implemented.
+This document distinguishes the code that exists in Stage 1 from the target MVP architecture. A component described as planned must not be treated as implemented.
 
 ## Architectural goals
 
@@ -19,32 +19,51 @@ RepoLens should remain understandable to a junior developer while creating stron
 - temporary source retention with guaranteed cleanup;
 - incremental delivery without premature microservices or shared packages.
 
-## Stage 0 architecture
+## Stage 1 architecture
 
-Stage 0 provides two independent application entry points and local supporting infrastructure:
+Stage 1 keeps the web application independent while introducing the first persisted API workflow and background worker:
 
 ```mermaid
 flowchart LR
     B["Browser"] --> W["Next.js landing page"]
-    C["HTTP client"] -->|"GET /health"| A["FastAPI application"]
+    C["HTTP client"] -->|"POST/GET /api/v1/analyses"| A["FastAPI application"]
     D["Docker Compose"] --> W
     D --> A
-    D -. "provisions, not used yet" .-> P["PostgreSQL"]
-    D -. "provisions, not used yet" .-> R["Redis"]
+    A --> P["PostgreSQL"]
+    A --> R["Redis broker"]
+    R --> K["Celery mock worker"]
+    K --> P
 ```
 
-The Next.js page has a repository URL field and disabled action button. It does not call the API. FastAPI exposes `GET /health` with a typed response and OpenAPI metadata. No repository analysis endpoint, database schema, queue, worker, GitHub client, authentication, or AI integration exists.
+The Next.js page still has a repository URL field and disabled action button; it does not call the API. FastAPI exposes `GET /health`, `POST /api/v1/analyses`, and `GET /api/v1/analyses/{analysis_id}`. The API accepts only canonicalizable public HTTPS GitHub repository URLs, stores repository identities and analysis lifecycle records, and publishes mock work to Redis. The worker performs no network or repository work; it only persists valid lifecycle transitions.
+
+Alembic owns the PostgreSQL schema. SQLAlchemy's asynchronous engine and sessions are shared by the API and worker. Redis is transport only and is not a system of record.
 
 ### Current repository boundaries
 
 ```text
 apps/web     Next.js App Router UI, styles, and frontend tests
-apps/api     FastAPI application, settings, and backend tests
+apps/api     FastAPI API, persistence, migrations, mock Celery worker, and tests
 docs         Requirements, roadmap, architecture, and ADRs
-compose.yaml Local web, API, PostgreSQL, and Redis orchestration
+compose.yaml Local web, API, worker, PostgreSQL, and Redis orchestration
 ```
 
-The applications manage their dependencies independently with pnpm and uv. There is no shared-contracts, shared-config, or analysis-core package in Stage 0 because no implemented code requires one.
+The applications manage their dependencies independently with pnpm and uv. There is no shared-contracts, shared-config, or analysis-core package because no implemented consumers require one.
+
+### Implemented Stage 1 lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> queued
+    queued --> processing: worker accepts job
+    queued --> failed: dispatch or setup failure
+    processing --> completed: mock work succeeds
+    processing --> failed: mock work fails
+    completed --> [*]
+    failed --> [*]
+```
+
+Terminal jobs are idempotent when redelivered. The transition policy blocks all other state changes. Safe, generic failure messages are persisted and returned; internal exception details are not exposed through the API.
 
 ## Target MVP architecture (planned)
 
@@ -82,14 +101,14 @@ The API and worker will use modules from the same backend codebase and domain mo
 
 The backend may introduce internal modules as these responsibilities become real. The boundaries should be visible in code, but each milestone should add only the structure it uses.
 
-## Planned data flow
+## Data flow
 
-The analysis flow is not implemented in Stage 0. Its intended sequence is:
+Stage 1 implements steps 1-3 and a mock terminal transition. Steps 4-11 remain planned:
 
 1. The user submits a public GitHub repository URL.
 2. The API validates and canonicalizes the URL, then records an analysis request.
 3. The API enqueues an idempotent background job and returns an analysis identifier.
-4. A worker acquires a shallow repository snapshot in an isolated temporary directory.
+4. In Stage 1, a worker performs no repository work and marks the record complete. A future worker will acquire a shallow repository snapshot in an isolated temporary directory.
 5. The worker builds a bounded inventory and skips unsafe, binary, excluded, or oversized content.
 6. Detection and parsing modules derive technology, documentation, structure, and symbol facts.
 7. Rules convert those facts into evidence-backed findings.
@@ -100,9 +119,9 @@ The analysis flow is not implemented in Stage 0. Its intended sequence is:
 
 ## Data ownership and persistence
 
-There are no application database tables in Stage 0. Planned MVP persistence will store repository identity, analysis lifecycle metadata, findings, scores, and a versioned report. Source files and full repository snapshots will not be stored as product records.
+Stage 1 stores canonical repository identity and analysis lifecycle metadata in `repositories` and `analyses`. Planned MVP persistence will later add findings, scores, and a versioned report. Source files and full repository snapshots are not stored as product records.
 
-Database migrations will begin when the first real persistence model is introduced. PostgreSQL is the planned system of record; Redis is planned only for queue transport and transient coordination.
+Alembic migrations version the PostgreSQL schema. PostgreSQL is the system of record; Redis is used only for queue transport and transient coordination.
 
 ## Security invariants
 
@@ -121,8 +140,8 @@ The following rules apply now and to every future milestone:
 
 - `apps/web` runs as a Next.js development server on port 3000.
 - `apps/api` runs as a FastAPI/Uvicorn development server on port 8000.
-- Docker Compose also provisions PostgreSQL and Redis with health checks for later stages.
-- Source mounts and reload commands support local iteration; Stage 0 does not contain production deployment optimization.
+- Docker Compose runs PostgreSQL and Redis with health checks and starts the API and worker only after both dependencies are healthy.
+- Source mounts and reload commands support local iteration; Stage 1 does not contain production deployment optimization.
 - GitHub Actions independently verifies backend formatting, linting, typing, and tests, plus frontend linting, typing, tests, and production build.
 
 Commands and local prerequisites are documented in the repository README. Architecture changes that alter component ownership, deployment boundaries, data retention, or safety guarantees require an ADR.

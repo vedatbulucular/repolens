@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     )
 
     debug: bool = False
+    database_url: str = "postgresql+asyncpg://repolens:repolens-local@localhost:5432/repolens"
+    redis_url: str = "redis://localhost:6379/0"
 
 
 @lru_cache

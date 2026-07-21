@@ -40,10 +40,17 @@ Install native dependencies from the repository root:
 
 ```bash
 pnpm --dir apps/web install
-uv --directory apps/api sync
+uv --directory apps/api sync --locked --all-groups
 ```
 
-Start the two applications in separate terminals:
+Start PostgreSQL and Redis, then apply the database migration:
+
+```bash
+docker compose up -d postgres redis
+uv --directory apps/api run alembic upgrade head
+```
+
+Start the applications and worker in separate terminals:
 
 ```bash
 pnpm --dir apps/web dev
@@ -53,15 +60,22 @@ pnpm --dir apps/web dev
 uv --directory apps/api run uvicorn repolens_api.main:app --reload --app-dir src --host 0.0.0.0 --port 8000
 ```
 
+```bash
+uv --directory apps/api run celery --app repolens_api.celery_app:celery_app worker --loglevel info
+```
+
 The web app is served at `http://localhost:3000`; the API health check is at `http://localhost:8000/health`.
 
 To use containers instead:
 
 ```bash
-docker compose up --build
+docker compose build
+docker compose up -d postgres redis
+docker compose run --rm api alembic upgrade head
+docker compose up
 ```
 
-Stop the containers with `docker compose down`. PostgreSQL and Redis are present for future milestones and are not application dependencies in Stage 0.
+Stop the containers with `docker compose down`. PostgreSQL is the Stage 1 system of record, and Redis is the Celery broker. Neither service contains or acquires repository source.
 
 ## Branches
 
@@ -92,7 +106,7 @@ Run every check affected by your change. For backend changes:
 ```bash
 uv --directory apps/api run ruff format --check .
 uv --directory apps/api run ruff check .
-uv --directory apps/api run mypy
+uv --directory apps/api run mypy src tests
 uv --directory apps/api run pytest
 ```
 
