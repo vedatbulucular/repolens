@@ -129,8 +129,9 @@ def test_ignored_subtree_is_never_entered(
     tmp_path: Path,
     inventory_limits: InventoryLimits,
 ) -> None:
-    ignored = tmp_path / "vendor"
-    ignored.mkdir()
+    repository_root = tmp_path / "repository"
+    ignored = repository_root / "vendor"
+    ignored.mkdir(parents=True)
     target = tmp_path / "outside.txt"
     target.write_text("outside", encoding="utf-8")
     link = ignored / "unsafe-link"
@@ -139,7 +140,7 @@ def test_ignored_subtree_is_never_entered(
     except (NotImplementedError, OSError):
         pytest.skip("symlink creation is not available")
 
-    scan = RepositoryScanner(inventory_limits).scan(tmp_path)
+    scan = RepositoryScanner(inventory_limits).scan(repository_root)
 
     assert scan.files == ()
     assert scan.ignored_directory_count == 1
