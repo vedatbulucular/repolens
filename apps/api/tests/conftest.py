@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import (
 
 from repolens_api.api import get_analysis_dispatcher
 from repolens_api.database import get_session
+from repolens_api.inventory.contracts import InventoryLimits
 from repolens_api.main import app
 from repolens_api.models import Base
 
@@ -23,6 +24,21 @@ from repolens_api.models import Base
 async def _create_schema(engine: AsyncEngine) -> None:
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+
+
+@pytest.fixture
+def inventory_limits() -> InventoryLimits:
+    """Return small but realistic limits for local inventory fixtures."""
+    return InventoryLimits(
+        timeout_seconds=5,
+        max_entries=100,
+        max_directories=50,
+        max_path_length=200,
+        max_manifest_bytes=1_024,
+        max_text_read_bytes=512,
+        binary_sample_bytes=64,
+        max_warnings=20,
+    )
 
 
 @pytest.fixture

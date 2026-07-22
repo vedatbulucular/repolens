@@ -80,6 +80,8 @@ Stage 2A uses a depth-one, single-branch Git clone and rejects all symbolic link
 
 ## Stage 3 — File inventory and technology detection
 
+**Status:** Stage 3A-1 in development on `feature/deterministic-repository-inventory`; the complete Stage 3 milestone is not yet implemented
+
 ### Scope
 
 - Build a bounded file tree and metadata inventory.

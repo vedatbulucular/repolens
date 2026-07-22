@@ -8,6 +8,7 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from repolens_api.acquisition.contracts import AcquisitionLimits
+from repolens_api.inventory.contracts import InventoryLimits
 
 
 class Settings(BaseSettings):
@@ -31,6 +32,14 @@ class Settings(BaseSettings):
     max_path_length: int = 512
     max_path_depth: int = 40
     workspace_root: Path = Path(gettempdir()) / "repolens-workspaces"
+    inventory_timeout_seconds: int = 20
+    max_inventory_entries: int = 20_000
+    max_inventory_directories: int = 5_000
+    max_inventory_path_length: int = 512
+    max_manifest_bytes: int = 1_048_576
+    max_text_read_bytes: int = 262_144
+    binary_sample_bytes: int = 8_192
+    max_analysis_warnings: int = 200
 
     @model_validator(mode="after")
     def validate_acquisition_settings(self) -> "Settings":
@@ -54,6 +63,31 @@ class Settings(BaseSettings):
             raise ValueError("max repository bytes cannot exceed max workspace bytes")
         if not self.workspace_root.is_absolute():
             raise ValueError("workspace root must be an absolute path")
+
+        inventory_limits = (
+            self.inventory_timeout_seconds,
+            self.max_inventory_entries,
+            self.max_inventory_directories,
+            self.max_inventory_path_length,
+            self.max_manifest_bytes,
+            self.max_text_read_bytes,
+            self.binary_sample_bytes,
+            self.max_analysis_warnings,
+        )
+        if any(limit <= 0 for limit in inventory_limits):
+            raise ValueError("inventory limits must be positive")
+        if self.max_inventory_entries > self.max_file_count:
+            raise ValueError("inventory entry limit cannot exceed acquisition entry limit")
+        if self.max_inventory_directories > self.max_inventory_entries:
+            raise ValueError("inventory directory limit cannot exceed inventory entry limit")
+        if self.max_inventory_path_length > self.max_path_length:
+            raise ValueError("inventory path limit cannot exceed acquisition path limit")
+        if self.max_manifest_bytes > self.max_file_bytes:
+            raise ValueError("manifest read limit cannot exceed acquisition file limit")
+        if self.max_text_read_bytes > self.max_file_bytes:
+            raise ValueError("text read limit cannot exceed acquisition file limit")
+        if self.binary_sample_bytes > self.max_text_read_bytes:
+            raise ValueError("binary sample limit cannot exceed text read limit")
         return self
 
     def acquisition_limits(self) -> AcquisitionLimits:
@@ -66,6 +100,19 @@ class Settings(BaseSettings):
             max_file_bytes=self.max_file_bytes,
             max_path_length=self.max_path_length,
             max_path_depth=self.max_path_depth,
+        )
+
+    def inventory_limits(self) -> InventoryLimits:
+        """Return the immutable limits used by repository inventory services."""
+        return InventoryLimits(
+            timeout_seconds=self.inventory_timeout_seconds,
+            max_entries=self.max_inventory_entries,
+            max_directories=self.max_inventory_directories,
+            max_path_length=self.max_inventory_path_length,
+            max_manifest_bytes=self.max_manifest_bytes,
+            max_text_read_bytes=self.max_text_read_bytes,
+            binary_sample_bytes=self.binary_sample_bytes,
+            max_warnings=self.max_analysis_warnings,
         )
 
 
