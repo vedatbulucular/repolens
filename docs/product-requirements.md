@@ -8,9 +8,9 @@ RepoLens is not a wrapper that sends an entire codebase to an AI model. Determin
 
 ## Current delivery scope
 
-Stage 2A adds bounded, temporary repository acquisition to the durable Stage 1 lifecycle. It accepts and canonicalizes supported public GitHub repository URLs, persists repository identity and job state, and lets the worker shallow-clone only the stored canonical URL under strict process and filesystem controls.
+Stage 2 adds bounded, temporary repository acquisition to the durable Stage 1 lifecycle. It accepts and canonicalizes supported public GitHub repository URLs, persists repository identity and job state, and lets the worker shallow-clone only the stored canonical URL under strict process, filesystem, and container controls.
 
-Stage 2A contacts GitHub only through a hardened HTTPS Git clone. It does not inventory source, detect technologies, parse files, score projects, persist source, or invoke AI. The web repository URL field and action button remain intentionally non-functional; only the backend lifecycle and acquisition flow are implemented.
+Stage 2 contacts GitHub only through a hardened HTTPS Git clone. The Docker worker is non-root, has a read-only root filesystem, no Linux capabilities, no-new-privileges, bounded writable tmpfs mounts, explicit resource limits, and separated data and egress networks. It does not inventory source, detect technologies, parse files, score projects, persist source, or invoke AI. The web repository URL field and action button remain intentionally non-functional; only the backend lifecycle and acquisition flow are implemented.
 
 ## Target users
 
@@ -84,6 +84,8 @@ The health score is an onboarding and readiness indicator, not an absolute judgm
 - Retain source only temporarily and remove it on every success or failure path.
 - Persist derived metadata and reports, not full source snapshots.
 - Keep credentials, tokens, and source bodies out of logs.
+- Confine repository acquisition to a non-root, read-only worker with bounded writable storage, dropped capabilities, no-new-privileges, and explicit memory, CPU, and PID limits.
+- Separate worker data access from web and API traffic; enforce domain-specific egress in deployment infrastructure rather than pretending Docker Compose provides a DNS allowlist.
 
 ### Reliability and explainability
 

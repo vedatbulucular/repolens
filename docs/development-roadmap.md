@@ -44,20 +44,20 @@ No repository analysis, acquisition, URL validation, persistence models, migrati
 - Define the supported public GitHub URL policy and canonicalization rules.
 - Add the first repository and analysis persistence models with migrations.
 - Add endpoints to create an analysis and read its state.
-- Introduce Redis and Celery with an idempotent mock analysis job.
+- Introduce Redis and Celery with an initial idempotent analysis job.
 - Define and test queued, processing, completed, and failed transitions.
 
 ### Acceptance criteria
 
 - A valid supported URL creates or reuses a canonical repository identity and returns an analysis ID.
 - Unsupported or malformed URLs return a documented validation error.
-- The mock worker moves an analysis through valid states and records safe failures.
+- The worker moves an analysis through valid states and records safe failures.
 - Migrations create and roll back the first schema in a clean database.
 - No repository is downloaded or analyzed yet.
 
 ## Stage 2 — Safe repository acquisition
 
-**Status:** Stage 2A implemented; Stage 2B hardening deferred
+**Status:** Complete
 
 ### Scope
 
@@ -67,7 +67,7 @@ No repository analysis, acquisition, URL validation, persistence models, migrati
 - Prevent symbolic-link and path traversal outside the workspace.
 - Classify acquisition failures without leaking source or credentials.
 
-Stage 2A uses a depth-one, single-branch Git clone and rejects all symbolic links. The source tree is scanned only to enforce safety limits; inventory and technology detection remain in Stage 3. Stage 2B may add a read-only root filesystem, dropped capabilities, explicit PID and memory limits, and stronger deployment-level egress controls.
+Stage 2A uses a depth-one, single-branch Git clone and rejects all symbolic links. Stage 2B confines the worker with a read-only root filesystem, dropped capabilities, no-new-privileges, bounded writable tmpfs mounts, explicit memory/CPU/PID limits, isolated data and egress networks, loopback-only infrastructure ports, and bounded Redis redelivery visibility. The source tree is scanned only to enforce safety limits; inventory and technology detection remain in Stage 3.
 
 ### Acceptance criteria
 
@@ -75,6 +75,8 @@ Stage 2A uses a depth-one, single-branch Git clone and rejects all symbolic link
 - Limit violations end in a documented safe failure state.
 - Tests prove cleanup after success, failure, cancellation, and timeout.
 - No repository-provided command, hook, dependency, or executable runs.
+- The Docker worker is non-root, capability-free, read-only outside its bounded tmpfs mounts, and resource-limited.
+- Worker loss preserves idempotent redelivery, while normal shutdown gives active acquisition time to clean up.
 
 ## Stage 3 — File inventory and technology detection
 
