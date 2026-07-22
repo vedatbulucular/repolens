@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     debug: bool = False
     database_url: str = "postgresql+asyncpg://repolens:repolens-local@localhost:5432/repolens"
     redis_url: str = "redis://localhost:6379/0"
+    broker_visibility_timeout_seconds: int = 300
     acquisition_timeout_seconds: int = 60
     max_repository_bytes: int = 104_857_600
     max_workspace_bytes: int = 268_435_456
@@ -34,6 +35,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_acquisition_settings(self) -> "Settings":
         """Reject unsafe or internally inconsistent acquisition limits."""
+        if self.broker_visibility_timeout_seconds <= 0:
+            raise ValueError("broker visibility timeout must be positive")
         positive_limits = (
             self.acquisition_timeout_seconds,
             self.max_repository_bytes,

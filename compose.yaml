@@ -15,6 +15,8 @@ services:
     volumes:
       - ./apps/web/app:/workspace/apps/web/app
       - web_next_cache:/workspace/apps/web/.next
+    networks:
+      - frontend
     healthcheck:
       test:
         [
@@ -48,10 +50,14 @@ services:
       REPOLENS_API_DEBUG: ${REPOLENS_API_DEBUG:-false}
       REPOLENS_API_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-repolens}:${POSTGRES_PASSWORD:-repolens-local}@postgres:5432/${POSTGRES_DB:-repolens}
       REPOLENS_API_REDIS_URL: redis://redis:6379/0
+      REPOLENS_API_BROKER_VISIBILITY_TIMEOUT_SECONDS: ${REPOLENS_API_BROKER_VISIBILITY_TIMEOUT_SECONDS:-300}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ./apps/api:/app
+    networks:
+      - frontend
+      - data
     depends_on:
       postgres:
         condition: service_healthy
@@ -82,10 +88,15 @@ services:
       - --loglevel
       - info
       - --concurrency
-      - "2"
+      - "${REPOLENS_WORKER_CONCURRENCY:-2}"
     environment:
+      HOME: /tmp/repolens-runtime
+      TEMP: /tmp/repolens-runtime
+      TMP: /tmp/repolens-runtime
+      TMPDIR: /tmp/repolens-runtime
       REPOLENS_API_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-repolens}:${POSTGRES_PASSWORD:-repolens-local}@postgres:5432/${POSTGRES_DB:-repolens}
       REPOLENS_API_REDIS_URL: redis://redis:6379/0
+      REPOLENS_API_BROKER_VISIBILITY_TIMEOUT_SECONDS: ${REPOLENS_API_BROKER_VISIBILITY_TIMEOUT_SECONDS:-300}
       REPOLENS_API_ACQUISITION_TIMEOUT_SECONDS: ${REPOLENS_API_ACQUISITION_TIMEOUT_SECONDS:-60}
       REPOLENS_API_MAX_REPOSITORY_BYTES: ${REPOLENS_API_MAX_REPOSITORY_BYTES:-104857600}
       REPOLENS_API_MAX_WORKSPACE_BYTES: ${REPOLENS_API_MAX_WORKSPACE_BYTES:-268435456}
@@ -93,12 +104,27 @@ services:
       REPOLENS_API_MAX_FILE_BYTES: ${REPOLENS_API_MAX_FILE_BYTES:-5242880}
       REPOLENS_API_MAX_PATH_LENGTH: ${REPOLENS_API_MAX_PATH_LENGTH:-512}
       REPOLENS_API_MAX_PATH_DEPTH: ${REPOLENS_API_MAX_PATH_DEPTH:-40}
-      REPOLENS_API_WORKSPACE_ROOT: ${REPOLENS_API_WORKSPACE_ROOT:-/tmp/repolens-workspaces}
+      REPOLENS_API_WORKSPACE_ROOT: /tmp/repolens-workspaces
     volumes:
-      - ./apps/api:/app
+      - ./apps/api/src:/app/src:ro
     user: "65534:65534"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: on-failure:3
+    stop_grace_period: "${REPOLENS_WORKER_STOP_GRACE_PERIOD:-90s}"
+    mem_limit: "${REPOLENS_WORKER_MEMORY_LIMIT:-1536m}"
+    cpus: "${REPOLENS_WORKER_CPU_LIMIT:-2.0}"
+    pids_limit: ${REPOLENS_WORKER_PIDS_LIMIT:-64}
+    shm_size: "${REPOLENS_WORKER_SHM_SIZE:-64m}"
     tmpfs:
-      - /tmp/repolens-workspaces:size=671088640,mode=0700,uid=65534,gid=65534
+      - /tmp/repolens-workspaces:size=${REPOLENS_WORKER_WORKSPACE_TMPFS_SIZE:-671088640},mode=0700,uid=65534,gid=65534,noexec,nosuid,nodev
+      - /tmp/repolens-runtime:size=${REPOLENS_WORKER_RUNTIME_TMPFS_SIZE:-67108864},mode=0700,uid=65534,gid=65534,noexec,nosuid,nodev
+    networks:
+      - worker-data
+      - worker-egress
     depends_on:
       postgres:
         condition: service_healthy
@@ -107,8 +133,10 @@ services:
     healthcheck:
       test:
         [
-          "CMD-SHELL",
-          "git --version >/dev/null 2>&1 && celery --app repolens_api.celery_app:celery_app inspect registered --destination celery@$${HOSTNAME} --timeout 5 | grep --quiet repolens.process_analysis",
+          "CMD",
+          "python",
+          "-c",
+          "import os, shutil, subprocess, sys; command = ['celery', '--app', 'repolens_api.celery_app:celery_app', 'inspect', 'registered', '--destination', 'celery@' + os.environ['HOSTNAME'], '--timeout', '5']; result = subprocess.run(command, capture_output=True, text=True, timeout=8, check=False); sys.exit(0 if shutil.which('git') and result.returncode == 0 and 'repolens.process_analysis' in result.stdout else 1)",
         ]
       interval: 15s
       timeout: 10s
@@ -122,9 +150,12 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-repolens}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-repolens-local}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - data
+      - worker-data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -134,9 +165,12 @@ services:
   redis:
     image: redis:8-alpine
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
+    networks:
+      - data
+      - worker-data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -147,3 +181,11 @@ volumes:
   postgres_data:
   redis_data:
   web_next_cache:
+
+networks:
+  frontend:
+  data:
+    internal: true
+  worker-data:
+    internal: true
+  worker-egress:

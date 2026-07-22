@@ -31,6 +31,6 @@ Celery's message identifier is stored as an internal processing token through a 
 - Git network bytes cannot be limited exactly before receipt, so process monitoring and a bounded tmpfs provide layered controls.
 - Repository source is unavailable after the acquisition task completes. Later analysis stages must operate inside the same temporary workspace context rather than persist or reopen it.
 
-## Deferred to Stage 2B
+## Container hardening follow-up
 
-Stage 2B may add a read-only container root filesystem, dropped Linux capabilities, explicit PID and memory limits, and deployment-specific network egress enforcement. Those controls strengthen containment but do not replace the application-level URL, Git, process, filesystem, and cleanup policies established here.
+Stage 2B adds the read-only container root filesystem, dropped Linux capabilities, explicit resource limits, and network separation recorded in [ADR 0004](0004-worker-container-hardening.md). Those controls strengthen containment but do not replace the application-level URL, Git, process, filesystem, and cleanup policies established here.

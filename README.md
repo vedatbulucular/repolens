@@ -14,7 +14,7 @@ RepoLens is intended to help students, junior developers, open-source maintainer
 
 ## Development status
 
-RepoLens is currently at **Stage 2A: safe repository acquisition**. The repository contains the Stage 0 foundation, the Stage 1 analysis lifecycle, and a Celery worker that acquires a bounded shallow snapshot of a stored canonical public GitHub repository URL in a temporary workspace.
+RepoLens has completed **Stage 2: safe repository acquisition and worker container hardening**. The repository contains the Stage 0 foundation, the Stage 1 analysis lifecycle, and a hardened Celery worker that acquires a bounded shallow snapshot of a stored canonical public GitHub repository URL in a temporary workspace.
 
 Repository content analysis is **not implemented yet**. The worker does not build an inventory, detect technologies, parse files, score a project, or invoke AI. It never runs repository hooks, scripts, dependencies, tests, builds, or entry points. The acquired source and Git metadata are removed before the task records completion. The landing-page URL field and **Analyze Repository** button remain intentionally non-functional.
 
@@ -31,7 +31,7 @@ Repository content analysis is **not implemented yet**. The worker does not buil
 | Local infrastructure | Docker Compose |
 | Continuous integration | GitHub Actions |
 
-Tree-sitter, repository acquisition, deterministic repository inspection, scoring, and AI explanations remain planned; they are not part of the current implementation.
+Tree-sitter, deterministic repository inspection, scoring, and AI explanations remain planned; they are not part of the current implementation.
 
 ## Repository structure
 
@@ -109,6 +109,8 @@ docker compose up
 
 The web application is available at `http://localhost:3000`. The API health endpoint is available at `http://localhost:8000/health`, and interactive API documentation is available at `http://localhost:8000/docs`. The worker has no public port.
 
+The worker runs as UID/GID 65534 with all Linux capabilities dropped, no-new-privileges enabled, and a read-only root filesystem. Only its bounded runtime and repository tmpfs mounts are writable. PostgreSQL and Redis publish their development ports on `127.0.0.1` only, so the documented native workflow remains available without exposing those services on LAN interfaces.
+
 Stop the environment with:
 
 ```bash
@@ -173,7 +175,9 @@ API errors use `application/problem+json`. A malformed analysis UUID returns `42
 
 The worker uses only the canonical URL loaded from PostgreSQL. It performs a depth-one, single-branch, tags-free HTTPS clone with prompts, credential helpers, submodule recursion, LFS smudging, repository hooks, unsafe protocols, and HTTP redirects disabled. Source is validated only against the configured security limits; no file inventory is produced or stored.
 
-The default acquisition limits are 60 seconds, 100 MiB of checked-out regular files, 256 MiB for the complete temporary workspace, 20,000 filesystem entries, 5 MiB per file, a 512-character relative path, and a maximum path depth of 40. The Docker worker stores workspaces in a 640 MiB tmpfs at `/tmp/repolens-workspaces`. Configure the corresponding `REPOLENS_API_*` variables documented in `.env.example` to change these bounds.
+The default acquisition limits are 60 seconds, 100 MiB of checked-out regular files, 256 MiB for the complete temporary workspace, 20,000 filesystem entries, 5 MiB per file, a 512-character relative path, and a maximum path depth of 40. The Docker worker uses concurrency 2, a 640 MiB repository tmpfs, a 64 MiB runtime tmpfs, 1536 MiB of memory, 2 CPUs, 64 PIDs, 64 MiB of shared memory, and a 90-second stop grace period. Configure the corresponding `REPOLENS_API_*` and `REPOLENS_WORKER_*` variables documented in `.env.example` to change these bounds. Docker Compose cannot restrict egress by DNS name; domain-based GitHub egress enforcement belongs to deployment infrastructure.
+
+Celery acknowledges tasks after completion and re-delivers worker-lost tasks. The Redis visibility timeout defaults to 300 seconds, while PostgreSQL remains the source of truth for analysis state. A normal SIGTERM initiates Celery warm shutdown and gives a running acquisition time to finish and clean its workspace.
 
 ## Quality checks
 
@@ -201,7 +205,7 @@ docker compose config
 
 1. **Stage 0 — Foundation (complete):** monorepo scaffold, health endpoint, landing page, tests, Compose, CI, and documentation.
 2. **Stage 1 — Analysis lifecycle (complete):** canonical public GitHub URLs, analysis records, status API, and queued jobs.
-3. **Stage 2 — Safe acquisition (Stage 2A current):** bounded shallow clone, temporary workspaces, safe failures, and guaranteed cleanup. Additional container hardening remains for Stage 2B.
+3. **Stage 2 — Safe acquisition (complete):** bounded shallow clone, temporary workspaces, safe failures, guaranteed cleanup, and hardened worker containment.
 4. **Stage 3 — Inventory and detection:** file inventory, language detection, documentation signals, and exclusions.
 5. **Stage 4 — Source parsing:** fault-tolerant Python and TypeScript symbol extraction with Tree-sitter.
 6. **Stage 5 — Rules and scoring:** evidence-backed findings and versioned deterministic scores.
@@ -213,7 +217,7 @@ See the [development roadmap](docs/development-roadmap.md) for milestone boundar
 
 ## Security principle
 
-**RepoLens must never execute code or scripts from an analyzed repository.** Untrusted repositories are treated as data only: no dependency installation, build command, test command, hook, or application entry point may be run. Stage 2A enforces explicit acquisition limits, rejects all symbolic links, stores source only temporarily, and removes it before the task reaches a terminal state.
+**RepoLens must never execute code or scripts from an analyzed repository.** Untrusted repositories are treated as data only: no dependency installation, build command, test command, hook, or application entry point may be run. Stage 2 enforces explicit acquisition limits, rejects all symbolic links, stores source only temporarily, removes it before the task reaches a terminal state, and confines the Docker worker with a read-only root filesystem and bounded writable tmpfs mounts.
 
 ## Contributing
 

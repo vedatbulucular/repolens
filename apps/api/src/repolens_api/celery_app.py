@@ -16,6 +16,9 @@ celery_app = Celery(
 celery_app.conf.update(
     accept_content=["json"],
     broker_connection_retry_on_startup=True,
+    broker_transport_options={
+        "visibility_timeout": settings.broker_visibility_timeout_seconds,
+    },
     task_ignore_result=True,
     task_acks_late=True,
     task_reject_on_worker_lost=True,

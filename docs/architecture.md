@@ -2,11 +2,11 @@
 
 ## Document status
 
-- **Current milestone:** Stage 1 — analysis lifecycle
-- **Last updated:** 2026-07-21
+- **Current milestone:** Stage 2 — safe repository acquisition and worker hardening
+- **Last updated:** 2026-07-22
 - **Architecture style:** monorepo with a modular-monolith backend and a separate web application
 
-This document distinguishes the code that exists in Stage 1 from the target MVP architecture. A component described as planned must not be treated as implemented.
+This document distinguishes the code that exists through Stage 2 from the target MVP architecture. A component described as planned must not be treated as implemented.
 
 ## Architectural goals
 
@@ -19,9 +19,9 @@ RepoLens should remain understandable to a junior developer while creating stron
 - temporary source retention with guaranteed cleanup;
 - incremental delivery without premature microservices or shared packages.
 
-## Stage 1 architecture
+## Current Stage 2 architecture
 
-Stage 1 keeps the web application independent while introducing the first persisted API workflow and background worker:
+Stage 2 keeps the web application independent while adding bounded repository acquisition to the persisted API workflow and background worker:
 
 ```mermaid
 flowchart LR
@@ -31,8 +31,10 @@ flowchart LR
     D --> A
     A --> P["PostgreSQL"]
     A --> R["Redis broker"]
-    R --> K["Celery mock worker"]
+    R --> K["Hardened Celery acquisition worker"]
     K --> P
+    K --> G["Public github.com repository"]
+    K --> T["Bounded temporary workspace"]
 ```
 
 The Next.js page still has a repository URL field and disabled action button; it does not call the API. FastAPI exposes `GET /health`, `POST /api/v1/analyses`, and `GET /api/v1/analyses/{analysis_id}`. The API accepts only canonicalizable public HTTPS GitHub repository URLs, stores repository identities and analysis lifecycle records, and publishes acquisition work to Redis. The worker shallow-clones only the stored canonical URL, enforces process and filesystem limits, removes the temporary source, and persists valid lifecycle transitions.
@@ -43,22 +45,22 @@ Alembic owns the PostgreSQL schema. SQLAlchemy's asynchronous engine and session
 
 ```text
 apps/web     Next.js App Router UI, styles, and frontend tests
-apps/api     FastAPI API, persistence, migrations, mock Celery worker, and tests
+apps/api     FastAPI API, persistence, migrations, acquisition worker, and tests
 docs         Requirements, roadmap, architecture, and ADRs
 compose.yaml Local web, API, worker, PostgreSQL, and Redis orchestration
 ```
 
 The applications manage their dependencies independently with pnpm and uv. There is no shared-contracts, shared-config, or analysis-core package because no implemented consumers require one.
 
-### Implemented Stage 1 lifecycle
+### Implemented analysis lifecycle
 
 ```mermaid
 stateDiagram-v2
     [*] --> queued
     queued --> processing: worker accepts job
     queued --> failed: dispatch or setup failure
-    processing --> completed: mock work succeeds
-    processing --> failed: mock work fails
+    processing --> completed: acquisition and cleanup succeed
+    processing --> failed: acquisition or cleanup fails safely
     completed --> [*]
     failed --> [*]
 ```
@@ -103,7 +105,7 @@ The backend may introduce internal modules as these responsibilities become real
 
 ## Data flow
 
-Stage 1 implements steps 1-3 and a mock terminal transition. Steps 4-11 remain planned:
+Stages 1 and 2 implement steps 1-7. Steps 8-13 remain planned:
 
 1. The user submits a public GitHub repository URL.
 2. The API validates and canonicalizes the URL, then records an analysis request.
@@ -121,7 +123,7 @@ Stage 1 implements steps 1-3 and a mock terminal transition. Steps 4-11 remain p
 
 ## Data ownership and persistence
 
-Stage 2A stores canonical repository identity, analysis lifecycle metadata, a safe acquisition error code, and an internal processing-delivery token in `repositories` and `analyses`. Planned MVP persistence will later add findings, scores, and a versioned report. Source files, file inventories, workspace paths, Git output, and repository snapshots are not stored as product records.
+Stage 2 stores canonical repository identity, analysis lifecycle metadata, a safe acquisition error code, and an internal processing-delivery token in `repositories` and `analyses`. Planned MVP persistence will later add findings, scores, and a versioned report. Source files, file inventories, workspace paths, Git output, and repository snapshots are not stored as product records.
 
 Alembic migrations version the PostgreSQL schema. PostgreSQL is the system of record; Redis is used only for queue transport and transient coordination.
 
@@ -143,7 +145,9 @@ The following rules apply now and to every future milestone:
 - `apps/web` runs as a Next.js development server on port 3000.
 - `apps/api` runs as a FastAPI/Uvicorn development server on port 8000.
 - Docker Compose runs PostgreSQL and Redis with health checks and starts the API and worker only after both dependencies are healthy.
-- Source mounts and reload commands support local iteration. The worker image alone includes Git and uses a non-root user plus a bounded tmpfs for repository workspaces.
+- The worker runs as UID/GID 65534 with a read-only root filesystem, no Linux capabilities, no-new-privileges, explicit memory/CPU/PID limits, and bounded noexec tmpfs mounts for runtime and repository data.
+- The API and worker reach PostgreSQL and Redis over separate internal networks. Only the worker joins its egress network; Docker Compose does not enforce a domain-based GitHub allowlist.
+- PostgreSQL and Redis development ports bind only to host loopback. The worker source bind mount is limited to read-only application source.
 - GitHub Actions independently verifies backend formatting, linting, typing, and tests, plus frontend linting, typing, tests, and production build.
 
 Commands and local prerequisites are documented in the repository README. Architecture changes that alter component ownership, deployment boundaries, data retention, or safety guarantees require an ADR.

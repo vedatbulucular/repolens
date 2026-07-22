@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS development
+FROM ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm-slim AS development
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONPATH=/app/src \
