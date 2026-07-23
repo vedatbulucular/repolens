@@ -8,7 +8,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from repolens_api.models import Analysis, AnalysisStatus, Repository
+from repolens_api.analysis_results import (
+    AnalysisResultErrorCode,
+    AnalysisResultSerializationError,
+    prepare_inventory_result,
+)
+from repolens_api.inventory.contracts import InventoryResult
+from repolens_api.models import Analysis, AnalysisResult, AnalysisStatus, Repository
 from repolens_api.repository_urls import CanonicalRepository
 
 
@@ -59,6 +65,55 @@ async def get_analysis_record(
         .where(Analysis.id == analysis_id)
     )
     return results.one_or_none()
+
+
+async def get_analysis_result_record(
+    session: AsyncSession,
+    analysis_id: UUID,
+) -> AnalysisResult | None:
+    """Return the single persisted result for an analysis when present."""
+    return await session.get(AnalysisResult, analysis_id)
+
+
+async def persist_inventory_result(
+    session: AsyncSession,
+    analysis_id: UUID,
+    processing_token: str,
+    result: InventoryResult,
+    *,
+    schema_version: int,
+    max_result_bytes: int,
+) -> AnalysisResult | None:
+    """Flush a result only while the caller still owns the processing analysis."""
+    prepared = prepare_inventory_result(result, max_result_bytes=max_result_bytes)
+    if prepared.schema_version != schema_version:
+        raise AnalysisResultSerializationError(AnalysisResultErrorCode.RESULT_SERIALIZATION_FAILED)
+
+    analysis = await session.scalar(
+        select(Analysis)
+        .where(
+            Analysis.id == analysis_id,
+            Analysis.status == AnalysisStatus.PROCESSING,
+            Analysis.processing_token == processing_token,
+        )
+        .with_for_update()
+    )
+    if analysis is None:
+        return None
+
+    persisted = await session.get(AnalysisResult, analysis_id)
+    if persisted is None:
+        persisted = AnalysisResult(
+            analysis_id=analysis_id,
+            schema_version=schema_version,
+            payload=prepared.payload,
+        )
+        session.add(persisted)
+    else:
+        persisted.schema_version = schema_version
+        persisted.payload = prepared.payload
+    await session.flush()
+    return persisted
 
 
 async def mark_analysis_failed(

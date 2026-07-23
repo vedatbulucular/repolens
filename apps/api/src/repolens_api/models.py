@@ -5,7 +5,18 @@ from enum import StrEnum
 from typing import ClassVar
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Uuid, func
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Uuid,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -80,3 +91,33 @@ class Analysis(Base):
     processing_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     repository: Mapped[Repository] = relationship(back_populates="analyses")
+
+
+analysis_result_payload_type = JSON().with_variant(JSONB(), "postgresql")
+
+
+class AnalysisResult(Base):
+    """One versioned deterministic result for an analysis."""
+
+    __tablename__ = "analysis_results"
+    __table_args__ = (
+        CheckConstraint(
+            "schema_version > 0",
+            name="ck_analysis_results_schema_version_positive",
+        ),
+    )
+
+    analysis_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("analyses.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[dict[str, object]] = mapped_column(
+        analysis_result_payload_type,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )

@@ -80,7 +80,7 @@ Stage 2A uses a depth-one, single-branch Git clone and rejects all symbolic link
 
 ## Stage 3 — File inventory and technology detection
 
-**Status:** Stage 3A-1 is complete on `main`; Stage 3A-2A is in development on `feature/repository-technology-detection`; the complete Stage 3A milestone is not yet implemented
+**Status:** Stage 3A-1 and Stage 3A-2A are complete on `main`; Stage 3A-2B1 is in development on `feature/analysis-result-persistence-api`; worker integration remains deferred and the complete Stage 3A milestone is not yet implemented
 
 ### Scope
 
@@ -90,6 +90,9 @@ Stage 2A uses a depth-one, single-branch Git clone and rejects all symbolic link
 - Apply explicit directory, generated-content, binary, and oversized-file exclusions.
 - Parse allowlisted manifest facts without retaining versions, commands, URLs, or source content.
 - Detect bounded technology evidence and conservative entry points without ASTs.
+- Serialize bounded inventory results explicitly, persist at most one versioned JSONB result per analysis, and expose lifecycle-aware typed result reads.
+
+Stage 3A-2B1 adds persistence and API primitives only. The production worker still performs acquisition without invoking inventory or writing an analysis result. Worker integration and atomic result-plus-completion finalization remain a separately approved Stage 3A-2B2 task.
 
 ### Acceptance criteria
 

@@ -16,7 +16,20 @@ from sqlalchemy.ext.asyncio import (
 
 from repolens_api.api import get_analysis_dispatcher
 from repolens_api.database import get_session
-from repolens_api.inventory.contracts import InventoryLimits
+from repolens_api.inventory.contracts import (
+    DirectoryFileCount,
+    EntryPointFinding,
+    FindingConfidence,
+    ImportantFileGroup,
+    InventoryLimits,
+    InventoryResult,
+    InventoryWarning,
+    InventoryWarningCode,
+    LanguageStatistic,
+    RepositorySummary,
+    TechnologyEvidence,
+    TechnologyFinding,
+)
 from repolens_api.main import app
 from repolens_api.models import Base
 
@@ -43,6 +56,72 @@ def inventory_limits() -> InventoryLimits:
         max_technology_findings=20,
         max_technology_evidence_per_finding=5,
         max_entry_points=20,
+    )
+
+
+@pytest.fixture
+def inventory_result() -> InventoryResult:
+    """Return a complete deterministic result without repository source content."""
+    return InventoryResult(
+        schema_version=1,
+        repository_summary=RepositorySummary(
+            regular_file_count=3,
+            analyzed_directory_count=1,
+            total_file_bytes=120,
+            max_directory_depth=1,
+            top_level_directories=("src",),
+            directories_by_file_count=(DirectoryFileCount(relative_path="src", file_count=2),),
+            ignored_directory_count=1,
+            binary_file_count=0,
+            unreadable_file_count=0,
+            skipped_content_file_count=0,
+            sensitive_file_count=0,
+        ),
+        languages=(
+            LanguageStatistic(
+                name="Python",
+                file_count=2,
+                total_bytes=100,
+                percentage=100.0,
+            ),
+        ),
+        important_files=(
+            ImportantFileGroup(
+                kind="readme",
+                count=1,
+                paths=("README.md",),
+                truncated=False,
+            ),
+        ),
+        technologies=(
+            TechnologyFinding(
+                name="FastAPI",
+                category="framework",
+                confidence=FindingConfidence.HIGH,
+                evidence=(
+                    TechnologyEvidence(
+                        evidence_type="python_dependency",
+                        relative_path="pyproject.toml",
+                    ),
+                ),
+                evidence_truncated=False,
+            ),
+        ),
+        entry_points=(
+            EntryPointFinding(
+                kind="python_module",
+                relative_path="src/main.py",
+                confidence=FindingConfidence.MEDIUM,
+                evidence_type="filename_convention",
+            ),
+        ),
+        warnings=(
+            InventoryWarning(
+                code=InventoryWarningCode.FILE_UNREADABLE,
+                relative_path="docs/notes.txt",
+                message="The file content could not be read safely.",
+            ),
+        ),
     )
 
 

@@ -32,6 +32,7 @@ def test_acquisition_settings_accept_consistent_positive_limits(tmp_path: Path) 
         max_technology_findings=4,
         max_technology_evidence_per_finding=2,
         max_entry_points=3,
+        max_result_bytes=9,
     )
 
     assert settings.acquisition_limits().max_workspace_bytes == 20
@@ -39,6 +40,7 @@ def test_acquisition_settings_accept_consistent_positive_limits(tmp_path: Path) 
     assert settings.inventory_limits().max_entries == 2
     assert settings.inventory_limits().binary_sample_bytes == 2
     assert settings.inventory_limits().max_manifest_nodes == 10
+    assert settings.max_result_bytes == 9
 
 
 def test_broker_visibility_timeout_loads_from_environment(
@@ -71,6 +73,16 @@ def test_inventory_settings_load_from_environment(monkeypatch: pytest.MonkeyPatc
     assert limits.max_entry_points == 19
 
 
+def test_result_byte_limit_default_and_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert Settings().max_result_bytes == 2_097_152
+
+    monkeypatch.setenv("REPOLENS_API_MAX_RESULT_BYTES", "4096")
+
+    assert Settings().max_result_bytes == 4096
+
+
 def test_inventory_settings_are_documented_and_passed_only_to_worker() -> None:
     repository_root = Path(__file__).resolve().parents[3]
     compose = (repository_root / "compose.yaml").read_text(encoding="utf-8")
@@ -89,6 +101,7 @@ def test_inventory_settings_are_documented_and_passed_only_to_worker() -> None:
         "REPOLENS_API_MAX_TECHNOLOGY_FINDINGS",
         "REPOLENS_API_MAX_TECHNOLOGY_EVIDENCE_PER_FINDING",
         "REPOLENS_API_MAX_ENTRY_POINTS",
+        "REPOLENS_API_MAX_RESULT_BYTES",
     )
 
     for name in names:
@@ -146,6 +159,8 @@ def test_inventory_settings_are_documented_and_passed_only_to_worker() -> None:
             "inventory limits must be positive",
         ),
         ({"max_entry_points": 0}, "inventory limits must be positive"),
+        ({"max_result_bytes": 0}, "result byte limit must be positive"),
+        ({"max_result_bytes": -1}, "result byte limit must be positive"),
     ],
 )
 def test_acquisition_settings_reject_unsafe_values(
@@ -176,6 +191,7 @@ def test_acquisition_settings_reject_unsafe_values(
         "max_technology_findings": 4,
         "max_technology_evidence_per_finding": 2,
         "max_entry_points": 3,
+        "max_result_bytes": 9,
     }
     values.update(overrides)
 

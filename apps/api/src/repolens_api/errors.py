@@ -33,9 +33,18 @@ def problem(
     title: str,
     status: int,
     detail: str,
+    error_code: str | None = None,
 ) -> ApiProblem:
     """Build an API problem exception without internal implementation details."""
-    return ApiProblem(ProblemDetail(type=type_, title=title, status=status, detail=detail))
+    return ApiProblem(
+        ProblemDetail(
+            type=type_,
+            title=title,
+            status=status,
+            detail=detail,
+            error_code=error_code,
+        )
+    )
 
 
 def install_error_handlers(app: FastAPI) -> None:
@@ -45,7 +54,7 @@ def install_error_handlers(app: FastAPI) -> None:
     async def handle_api_problem(_request: Request, exc: ApiProblem) -> JSONResponse:
         return JSONResponse(
             status_code=exc.problem.status,
-            content=exc.problem.model_dump(),
+            content=exc.problem.model_dump(exclude_none=True),
             media_type="application/problem+json",
         )
 
@@ -62,6 +71,6 @@ def install_error_handlers(app: FastAPI) -> None:
         )
         return JSONResponse(
             status_code=request_problem.status,
-            content=request_problem.model_dump(),
+            content=request_problem.model_dump(exclude_none=True),
             media_type="application/problem+json",
         )

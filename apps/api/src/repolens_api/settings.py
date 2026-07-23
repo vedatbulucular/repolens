@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     max_technology_findings: int = 100
     max_technology_evidence_per_finding: int = 20
     max_entry_points: int = 100
+    max_result_bytes: int = 2_097_152
 
     @model_validator(mode="after")
     def validate_acquisition_settings(self) -> "Settings":
@@ -98,6 +99,8 @@ class Settings(BaseSettings):
             raise ValueError("text read limit cannot exceed acquisition file limit")
         if self.binary_sample_bytes > self.max_text_read_bytes:
             raise ValueError("binary sample limit cannot exceed text read limit")
+        if self.max_result_bytes <= 0:
+            raise ValueError("result byte limit must be positive")
         return self
 
     def acquisition_limits(self) -> AcquisitionLimits:

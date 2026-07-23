@@ -6,21 +6,26 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
+from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from repolens_api.analysis_results import SUPPORTED_RESULT_SCHEMA_VERSIONS
 from repolens_api.database import get_session
 from repolens_api.errors import problem, problem_response
-from repolens_api.models import Analysis
+from repolens_api.models import Analysis, AnalysisResult, AnalysisStatus
 from repolens_api.repository_urls import InvalidRepositoryUrl, parse_repository_url
 from repolens_api.schemas import (
     AnalysisCreateRequest,
     AnalysisResponse,
+    AnalysisResultResponse,
+    InventoryPayloadResponse,
     RepositoryResponse,
 )
 from repolens_api.services import (
     create_analysis_record,
     get_analysis_record,
+    get_analysis_result_record,
     mark_analysis_failed,
 )
 from repolens_api.tasks import enqueue_analysis
@@ -55,6 +60,36 @@ def _analysis_response(analysis: Analysis) -> AnalysisResponse:
         error_message=analysis.error_message,
         error_code=analysis.error_code,
         repository=RepositoryResponse.model_validate(analysis.repository),
+    )
+
+
+def _analysis_result_response(
+    analysis: Analysis,
+    result: AnalysisResult,
+) -> AnalysisResultResponse:
+    try:
+        payload = InventoryPayloadResponse.model_validate(result.payload)
+    except ValidationError:
+        raise problem(
+            type_="analysis_result_invalid",
+            title="Analysis result invalid",
+            status=500,
+            detail="The stored analysis result is invalid.",
+        ) from None
+
+    return AnalysisResultResponse(
+        analysis_id=analysis.id,
+        result_schema_version=result.schema_version,
+        repository=RepositoryResponse.model_validate(analysis.repository),
+        repository_summary=payload.repository_summary,
+        languages=payload.languages,
+        important_files=payload.important_files,
+        technologies=payload.technologies,
+        entry_points=payload.entry_points,
+        warnings=payload.warnings,
+        requested_at=_as_utc(analysis.requested_at),
+        started_at=_optional_as_utc(analysis.started_at),
+        completed_at=_optional_as_utc(analysis.completed_at),
     )
 
 
@@ -149,3 +184,80 @@ async def get_analysis(
         )
 
     return _analysis_response(analysis)
+
+
+@router.get(
+    "/analyses/{analysis_id}/result",
+    response_model=AnalysisResultResponse,
+    responses={
+        404: problem_response("Analysis not found"),
+        409: problem_response("Analysis is not ready or failed"),
+        422: problem_response("Invalid analysis identifier"),
+        500: problem_response("Analysis result unavailable"),
+        503: problem_response("Database unavailable"),
+    },
+)
+async def get_analysis_result(
+    analysis_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> AnalysisResultResponse:
+    """Return the typed persisted result for one completed analysis."""
+    try:
+        analysis = await get_analysis_record(session, analysis_id)
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise problem(
+            type_="database_error",
+            title="Database operation failed",
+            status=503,
+            detail="The analysis result could not be loaded. Please try again later.",
+        ) from exc
+
+    if analysis is None:
+        raise problem(
+            type_="analysis_not_found",
+            title="Analysis not found",
+            status=404,
+            detail="No analysis exists for the supplied identifier.",
+        )
+    if analysis.status in {AnalysisStatus.QUEUED, AnalysisStatus.PROCESSING}:
+        raise problem(
+            type_="analysis_not_ready",
+            title="Analysis result not ready",
+            status=409,
+            detail="The analysis result is not ready.",
+        )
+    if analysis.status is AnalysisStatus.FAILED:
+        raise problem(
+            type_="analysis_failed",
+            title="Analysis failed",
+            status=409,
+            detail="The analysis did not produce a result.",
+            error_code=analysis.error_code,
+        )
+
+    try:
+        result = await get_analysis_result_record(session, analysis_id)
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise problem(
+            type_="database_error",
+            title="Database operation failed",
+            status=503,
+            detail="The analysis result could not be loaded. Please try again later.",
+        ) from exc
+    if result is None:
+        raise problem(
+            type_="analysis_result_missing",
+            title="Analysis result missing",
+            status=500,
+            detail="The completed analysis result is unavailable.",
+        )
+    if result.schema_version not in SUPPORTED_RESULT_SCHEMA_VERSIONS:
+        raise problem(
+            type_="unsupported_result_schema",
+            title="Unsupported analysis result schema",
+            status=500,
+            detail="The stored analysis result schema is not supported.",
+        )
+    return _analysis_result_response(analysis, result)
