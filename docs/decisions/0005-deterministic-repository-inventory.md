@@ -5,7 +5,7 @@
 
 ## Context
 
-RepoLens must derive useful onboarding facts from an untrusted public repository without executing repository code, installing dependencies, or retaining source. Stage 3 needs a deterministic inventory contract, evidence-based technology signals, conservative entry-point detection, and a persistence boundary that can later be integrated with the hardened worker.
+RepoLens must derive useful onboarding facts from an untrusted public repository without executing repository code, installing dependencies, or retaining source. Stage 3 needs a deterministic inventory contract, evidence-based technology signals, conservative entry-point detection, and a persistence boundary integrated with the hardened worker.
 
 The complete file inventory may contain many paths and intermediate facts. Persisting that internal structure directly would couple storage to scanner implementation details and increase the chance of retaining source-derived or unsafe values. A result also needs a stable schema, bounded serialized size, lifecycle ownership, and predictable API validation.
 
@@ -39,7 +39,9 @@ Canonical byte measurement uses UTF-8 JSON with sorted keys, fixed separators, a
 
 Inventory warnings are bounded non-fatal facts and may appear in a successful result. Fatal scanner and serializer failures produce no result.
 
-The persistence primitive serializes before acquiring a database lock, then writes only while the analysis is `processing` and owned by the same processing token. The same owner may idempotently replace the single deterministic result. Another token and every non-processing state are rejected. The primitive flushes but never commits or changes lifecycle status.
+The worker invokes inventory while the validated acquisition context is open, keeps the `InventoryResult` in memory, and waits for workspace cleanup before finalization. Cleanup failure produces no result and no completed state. Deterministic fatal inventory and serialization failures are recorded with safe codes; bounded manifest warnings remain non-fatal and are persisted in successful results.
+
+Finalization serializes before acquiring a database lock, then writes only while the analysis is `processing` and owned by the same processing token. The result insert or update and the `completed` transition share one short transaction. Another token and every non-processing state are no-ops. Database infrastructure failures roll back partial work and escape the task so late acknowledgment and worker-lost redelivery can recover.
 
 The result API accepts only supported schema versions and validates stored payloads against explicit typed response models. Unknown schemas, invalid payloads, and completed analyses missing a result return fixed safe server errors. Queued, processing, and failed lifecycle states return fixed conflict responses.
 
@@ -51,5 +53,5 @@ The result API accepts only supported schema versions and validates stored paylo
 - A one-row model simplifies idempotency but deliberately provides no result history.
 - Schema evolution requires explicit supported-version handling and future migrations.
 - Conservative bounded text signals can produce false positives; deeper AST analysis remains separate.
-- Stage 3A-2B1 exposes persistence and API primitives but does not invoke inventory from the worker.
-- Worker integration, cleanup coordination, and atomic result-plus-completion finalization require the separately approved Stage 3A-2B2 milestone.
+- Stage 3A-2B2 completes worker integration, cleanup coordination, and atomic result-plus-completion finalization.
+- A delivery lost after cleanup but before commit safely repeats deterministic acquisition and inventory; a delivery repeated after commit sees a terminal analysis and performs no work.

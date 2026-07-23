@@ -2,11 +2,11 @@
 
 ## Document status
 
-- **Current milestone:** Stage 3A-2B1 — deterministic result persistence and API
+- **Current milestone:** Stage 3A-2B2 — worker inventory and atomic result finalization
 - **Last updated:** 2026-07-23
 - **Architecture style:** monorepo with a modular-monolith backend and a separate web application
 
-This document distinguishes the code that exists through Stage 3A-2B1 from the target MVP architecture. A component described as planned must not be treated as implemented.
+This document distinguishes the code that exists through Stage 3A from the target MVP architecture. A component described as planned must not be treated as implemented.
 
 ## Architectural goals
 
@@ -19,9 +19,9 @@ RepoLens should remain understandable to a junior developer while creating stron
 - temporary source retention with guaranteed cleanup;
 - incremental delivery without premature microservices or shared packages.
 
-## Current Stage 3A-2B1 architecture
+## Current Stage 3A architecture
 
-The current architecture keeps the web application independent, preserves the hardened acquisition worker, and adds deterministic inventory, result persistence, and typed result-read primitives without connecting inventory to the production worker:
+The current architecture keeps the web application independent and connects deterministic inventory to the hardened acquisition worker with cleanup-before-finalization:
 
 ```mermaid
 flowchart LR
@@ -33,18 +33,18 @@ flowchart LR
     A --> J["Typed result validation"]
     J --> P
     A --> R["Redis broker"]
-    R --> K["Hardened Celery acquisition worker"]
+    R --> K["Hardened Celery analysis worker"]
     K --> P
     K --> G["Public github.com repository"]
     K --> T["Bounded temporary workspace"]
-    E["Deterministic inventory modules"] -. "Stage 3A-2B2 integration pending" .-> K
+    K --> E["Deterministic inventory modules"]
     E --> S["Explicit deterministic serializer"]
-    S -->|"Bounded JSONB payload primitive"| P
+    S -->|"Atomic result plus completed commit"| P
 ```
 
 The Next.js page still has a repository URL field and disabled action button; it does not call the API. FastAPI exposes `GET /health`, the analysis lifecycle endpoints, and `GET /api/v1/analyses/{analysis_id}/result`. The result endpoint returns typed persisted schema version 1 data only for a completed analysis. Queued and processing analyses return `analysis_not_ready`; failed analyses return `analysis_failed`; completed analyses without a result return the integrity error `analysis_result_missing`.
 
-The API accepts only canonicalizable public HTTPS GitHub repository URLs, stores repository identities and analysis lifecycle records, and publishes acquisition work to Redis. The worker shallow-clones only the stored canonical URL, enforces process and filesystem limits, removes the temporary source, and persists the existing lifecycle transitions. It does not yet invoke inventory or persist `AnalysisResult`, so a real acquisition completed by the current worker has no result and the result endpoint intentionally reports `analysis_result_missing`. Stage 3A-2B2 will own that integration and atomic finalization design.
+The API accepts only canonicalizable public HTTPS GitHub repository URLs, stores repository identities and analysis lifecycle records, and publishes work to Redis. The worker shallow-clones only the stored canonical URL, yields the validated repository root through a bounded async context, runs inventory while that context exists, and removes the temporary source before opening the result finalization transaction. A successful finalization persists `AnalysisResult` and changes the owned analysis to `completed` in one commit. Legacy completed rows without a result still report `analysis_result_missing`.
 
 Alembic owns the PostgreSQL schema. SQLAlchemy's asynchronous engine and sessions are shared by the API and worker. Redis is transport only and is not a system of record.
 
@@ -66,8 +66,8 @@ stateDiagram-v2
     [*] --> queued
     queued --> processing: worker accepts job
     queued --> failed: dispatch or setup failure
-    processing --> completed: acquisition and cleanup succeed
-    processing --> failed: acquisition or cleanup fails safely
+    processing --> completed: inventory, cleanup, and result commit succeed
+    processing --> failed: deterministic work or cleanup fails safely
     completed --> [*]
     failed --> [*]
 ```
@@ -88,7 +88,7 @@ analysis_results
 └── created_at        timezone-aware database timestamp
 ```
 
-Persistence first serializes and enforces the 2 MiB default byte limit without holding a database row lock. It then locks the owning analysis briefly and flushes only when the analysis is still `processing` with the same processing token. Repeated writes by the same owner update the single row; another token or a non-processing lifecycle state cannot write. The primitive never commits and does not complete the analysis.
+Persistence first serializes and enforces the 2 MiB default byte limit without holding a database row lock. Finalization then locks the owning analysis briefly and writes only when the analysis is still `processing` with the same processing token. The result insert or update and the transition to `completed` share one transaction and commit. A rollback leaves neither a partial result nor a completed state. Another token and every non-processing lifecycle state are no-ops.
 
 ## Target MVP architecture (planned)
 
@@ -128,19 +128,19 @@ The backend may introduce internal modules as these responsibilities become real
 
 ## Data flow
 
-Stages 1 and 2 implement steps 1-7. Stage 3A implements the deterministic modules and Stage 3A-2B1 implements steps 10-11 as disconnected primitives; worker orchestration between them remains planned:
+Stages 1 through 3A implement steps 1-11 as one backend flow:
 
 1. The user submits a public GitHub repository URL.
 2. The API validates and canonicalizes the URL, then records an analysis request.
 3. The API enqueues an idempotent background job and returns an analysis identifier.
 4. The Celery worker atomically claims the analysis using its delivery identifier, reloads the canonical URL from PostgreSQL, and acquires a shallow repository snapshot in an isolated temporary directory.
 5. Acquisition disables repository hooks, prompts, credential helpers, submodules, LFS smudging, unsafe protocols, and redirects; time and workspace growth are bounded throughout the Git process.
-6. A security-only filesystem pass rejects limit violations, symbolic links, unsafe paths, and special files without producing or storing an inventory.
-7. Git metadata and the complete workspace are removed before the analysis is marked complete.
-8. The implemented inventory modules can build bounded metadata, language, manifest, technology, and conservative entry-point evidence without executing repository code.
-9. Stage 3A-2B2 will invoke those modules while the acquired workspace exists and coordinate cleanup with lifecycle finalization.
-10. The implemented explicit serializer can produce a deterministic, size-limited schema version 1 payload without source bodies or dependency values.
-11. The implemented persistence primitive can store that payload as the analysis's single JSONB result, and the typed result endpoint can read a valid completed result.
+6. A security pass rejects limit violations, symbolic links, unsafe paths, and special files before inventory begins.
+7. Inventory derives bounded metadata, language, manifest, technology, and conservative entry-point evidence without executing repository code.
+8. The complete inventory result remains in memory while the acquisition context removes Git metadata and the temporary workspace.
+9. Only after cleanup succeeds, the explicit serializer produces a deterministic, size-limited schema version 1 payload without source bodies or dependency values.
+10. A short transaction verifies processing-token ownership, stores the single JSONB result, and marks the analysis completed atomically.
+11. The typed result endpoint reads the completed result. A deterministic fatal error records a safe failed state; a database finalization failure is raised for Celery redelivery.
 12. Future rules and scoring will extend the versioned result contract with evidence-backed findings and scores.
 13. The future web dashboard will poll the API and render completed results.
 
@@ -159,7 +159,7 @@ The following rules apply now and to every future milestone:
 3. Acquisition must use an allowlisted GitHub URL policy and resist redirects and SSRF.
 4. Repository, file-count, file-size, parser-time, and total-analysis limits must be explicit and tested.
 5. Symbolic links must not escape the temporary analysis root.
-6. Source content is temporary and must be removed in every terminal job state.
+6. Source content is temporary and must be removed before success finalization and on every failure or cancellation path.
 7. Logs and persistent records must not contain source bodies, credentials, or tokens.
 8. AI may explain verified structured facts but must not invent files, technologies, or findings.
 

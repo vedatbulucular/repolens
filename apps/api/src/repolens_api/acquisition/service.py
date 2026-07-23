@@ -1,5 +1,8 @@
 """Orchestration for one bounded, temporary repository acquisition."""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
 from uuid import UUID
 
 from repolens_api.acquisition.contracts import AcquisitionLimits, AcquisitionSummary
@@ -7,7 +10,7 @@ from repolens_api.acquisition.errors import AcquisitionError, RepositoryTooLarge
 from repolens_api.acquisition.git import GitRepositoryClient
 from repolens_api.acquisition.processes import directory_size
 from repolens_api.acquisition.validation import validate_repository_tree
-from repolens_api.acquisition.workspace import WorkspaceManager
+from repolens_api.acquisition.workspace import Workspace, WorkspaceManager
 from repolens_api.repository_urls import InvalidRepositoryUrl, parse_repository_url
 
 
@@ -29,17 +32,36 @@ class RepositoryAcquisitionService:
         """Acquire a repository temporarily and return only aggregate counters."""
         self._validate_canonical_url(canonical_url)
         async with self._workspaces.temporary_workspace(analysis_id) as workspace:
-            await self._git.clone(canonical_url, workspace, self._limits)
-            workspace_bytes = directory_size(workspace.root)
-            if workspace_bytes > self._limits.max_workspace_bytes:
-                raise RepositoryTooLarge
-            self._workspaces.remove_git_metadata(workspace)
-            validation = validate_repository_tree(workspace.repository, self._limits)
-            return AcquisitionSummary(
-                repository_bytes=validation.repository_bytes,
-                workspace_bytes=workspace_bytes,
-                entry_count=validation.entry_count,
-            )
+            return await self._acquire_into_workspace(canonical_url, workspace)
+
+    @asynccontextmanager
+    async def acquire_workspace(
+        self,
+        analysis_id: UUID,
+        canonical_url: str,
+    ) -> AsyncIterator[Path]:
+        """Yield a validated repository root until guaranteed workspace cleanup."""
+        self._validate_canonical_url(canonical_url)
+        async with self._workspaces.temporary_workspace(analysis_id) as workspace:
+            await self._acquire_into_workspace(canonical_url, workspace)
+            yield workspace.repository
+
+    async def _acquire_into_workspace(
+        self,
+        canonical_url: str,
+        workspace: Workspace,
+    ) -> AcquisitionSummary:
+        await self._git.clone(canonical_url, workspace, self._limits)
+        workspace_bytes = directory_size(workspace.root)
+        if workspace_bytes > self._limits.max_workspace_bytes:
+            raise RepositoryTooLarge
+        self._workspaces.remove_git_metadata(workspace)
+        validation = validate_repository_tree(workspace.repository, self._limits)
+        return AcquisitionSummary(
+            repository_bytes=validation.repository_bytes,
+            workspace_bytes=workspace_bytes,
+            entry_count=validation.entry_count,
+        )
 
     @staticmethod
     def _validate_canonical_url(canonical_url: str) -> None:

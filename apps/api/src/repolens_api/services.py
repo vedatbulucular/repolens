@@ -1,19 +1,24 @@
 """Database operations for repository and analysis lifecycle records."""
 
+import asyncio
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from repolens_api.analysis_results import (
     AnalysisResultErrorCode,
+    AnalysisResultPersistenceError,
     AnalysisResultSerializationError,
+    SerializedInventoryResult,
     prepare_inventory_result,
 )
 from repolens_api.inventory.contracts import InventoryResult
+from repolens_api.lifecycle import transition_analysis
 from repolens_api.models import Analysis, AnalysisResult, AnalysisStatus, Repository
 from repolens_api.repository_urls import CanonicalRepository
 
@@ -89,7 +94,65 @@ async def persist_inventory_result(
     if prepared.schema_version != schema_version:
         raise AnalysisResultSerializationError(AnalysisResultErrorCode.RESULT_SERIALIZATION_FAILED)
 
-    analysis = await session.scalar(
+    analysis = await _lock_owned_processing_analysis(
+        session,
+        analysis_id,
+        processing_token,
+    )
+    if analysis is None:
+        return None
+
+    persisted = await _upsert_prepared_result(session, analysis_id, prepared)
+    await session.flush()
+    return persisted
+
+
+async def finalize_analysis_with_result(
+    session: AsyncSession,
+    analysis_id: UUID,
+    processing_token: str,
+    result: InventoryResult,
+    *,
+    schema_version: int,
+    max_result_bytes: int,
+) -> bool:
+    """Atomically persist one result and complete its still-owned analysis."""
+    prepared = prepare_inventory_result(result, max_result_bytes=max_result_bytes)
+    if prepared.schema_version != schema_version:
+        raise AnalysisResultSerializationError(AnalysisResultErrorCode.RESULT_SERIALIZATION_FAILED)
+
+    try:
+        analysis = await _lock_owned_processing_analysis(
+            session,
+            analysis_id,
+            processing_token,
+        )
+        if analysis is None:
+            await session.rollback()
+            return False
+
+        await _upsert_prepared_result(session, analysis_id, prepared)
+        transition_analysis(analysis, AnalysisStatus.COMPLETED)
+        await session.flush()
+        await session.commit()
+    except (AnalysisResultSerializationError, SQLAlchemyError):
+        await session.rollback()
+        raise
+    except asyncio.CancelledError:
+        await session.rollback()
+        raise
+    except Exception:
+        await session.rollback()
+        raise AnalysisResultPersistenceError from None
+    return True
+
+
+async def _lock_owned_processing_analysis(
+    session: AsyncSession,
+    analysis_id: UUID,
+    processing_token: str,
+) -> Analysis | None:
+    statement = (
         select(Analysis)
         .where(
             Analysis.id == analysis_id,
@@ -98,21 +161,25 @@ async def persist_inventory_result(
         )
         .with_for_update()
     )
-    if analysis is None:
-        return None
+    return cast(Analysis | None, await session.scalar(statement))
 
+
+async def _upsert_prepared_result(
+    session: AsyncSession,
+    analysis_id: UUID,
+    prepared: SerializedInventoryResult,
+) -> AnalysisResult:
     persisted = await session.get(AnalysisResult, analysis_id)
     if persisted is None:
         persisted = AnalysisResult(
             analysis_id=analysis_id,
-            schema_version=schema_version,
+            schema_version=prepared.schema_version,
             payload=prepared.payload,
         )
         session.add(persisted)
     else:
-        persisted.schema_version = schema_version
+        persisted.schema_version = prepared.schema_version
         persisted.payload = prepared.payload
-    await session.flush()
     return persisted
 
 
@@ -126,8 +193,6 @@ async def mark_analysis_failed(
     analysis = await session.get(Analysis, analysis_id)
     if analysis is None or analysis.status in Analysis.terminal_statuses:
         return
-
-    from repolens_api.lifecycle import transition_analysis
 
     transition_analysis(
         analysis,

@@ -4,14 +4,17 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime
+from typing import NoReturn
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from repolens_api.acquisition.errors import AcquisitionTimeout, CleanupFailed
+from repolens_api.inventory.contracts import InventoryResult
 from repolens_api.lifecycle import InvalidStatusTransition, transition_analysis
-from repolens_api.models import Analysis, AnalysisStatus, Repository
+from repolens_api.models import Analysis, AnalysisResult, AnalysisStatus, Repository
 from repolens_api.tasks import process_analysis
 
 
@@ -88,14 +91,16 @@ async def _load_analysis(
 
 def test_worker_uses_database_canonical_url_and_completes(
     test_sessions: async_sessionmaker[AsyncSession],
+    inventory_result: InventoryResult,
 ) -> None:
     analysis = asyncio.run(_create_analysis(test_sessions))
     received: list[tuple[UUID, str]] = []
 
-    async def acquire(analysis_id: UUID, canonical_url: str) -> None:
+    async def analyze(analysis_id: UUID, canonical_url: str) -> InventoryResult:
         received.append((analysis_id, canonical_url))
+        return inventory_result
 
-    asyncio.run(process_analysis(analysis.id, "delivery-1", sessions=test_sessions, work=acquire))
+    asyncio.run(process_analysis(analysis.id, "delivery-1", sessions=test_sessions, work=analyze))
 
     persisted = asyncio.run(_load_analysis(test_sessions, analysis.id))
     assert received == [(analysis.id, "https://github.com/openai/openai-python")]
@@ -103,10 +108,20 @@ def test_worker_uses_database_canonical_url_and_completes(
     assert persisted.started_at is not None
     assert persisted.completed_at is not None
     assert persisted.processing_token is None
+    assert persisted.error_code is None
+
+    async def count_results() -> int:
+        async with test_sessions() as session:
+            count = await session.scalar(select(func.count()).select_from(AnalysisResult))
+            assert count is not None
+            return count
+
+    assert asyncio.run(count_results()) == 1
 
 
 def test_invalid_stored_url_fails_without_starting_work(
     test_sessions: async_sessionmaker[AsyncSession],
+    inventory_result: InventoryResult,
 ) -> None:
     analysis = asyncio.run(
         _create_analysis(
@@ -116,11 +131,12 @@ def test_invalid_stored_url_fails_without_starting_work(
     )
     calls = 0
 
-    async def acquire(_analysis_id: UUID, _canonical_url: str) -> None:
+    async def analyze(_analysis_id: UUID, _canonical_url: str) -> InventoryResult:
         nonlocal calls
         calls += 1
+        return inventory_result
 
-    asyncio.run(process_analysis(analysis.id, "delivery-1", sessions=test_sessions, work=acquire))
+    asyncio.run(process_analysis(analysis.id, "delivery-1", sessions=test_sessions, work=analyze))
 
     persisted = asyncio.run(_load_analysis(test_sessions, analysis.id))
     assert calls == 0
@@ -133,7 +149,7 @@ def test_worker_records_safe_timeout(
 ) -> None:
     analysis = asyncio.run(_create_analysis(test_sessions))
 
-    async def timeout(_analysis_id: UUID, _canonical_url: str) -> None:
+    async def timeout(_analysis_id: UUID, _canonical_url: str) -> NoReturn:
         raise AcquisitionTimeout
 
     asyncio.run(process_analysis(analysis.id, "delivery-1", sessions=test_sessions, work=timeout))
@@ -149,29 +165,30 @@ def test_unexpected_failure_is_sanitized(
 ) -> None:
     analysis = asyncio.run(_create_analysis(test_sessions))
 
-    async def fail(_analysis_id: UUID, _canonical_url: str) -> None:
+    async def fail(_analysis_id: UUID, _canonical_url: str) -> NoReturn:
         raise RuntimeError("credential and private system path")
 
     asyncio.run(process_analysis(analysis.id, "delivery-1", sessions=test_sessions, work=fail))
 
     persisted = asyncio.run(_load_analysis(test_sessions, analysis.id))
     assert persisted.status is AnalysisStatus.FAILED
-    assert persisted.error_code == "acquisition_failed"
-    assert persisted.error_message == "Repository acquisition failed."
+    assert persisted.error_code == "repository_analysis_failed"
+    assert persisted.error_message == "Repository analysis failed."
     assert "credential" not in persisted.error_message
 
 
 def test_terminal_task_retry_is_noop(
     test_sessions: async_sessionmaker[AsyncSession],
+    inventory_result: InventoryResult,
 ) -> None:
     analysis = asyncio.run(_create_analysis(test_sessions))
 
-    async def acquire(_analysis_id: UUID, _canonical_url: str) -> None:
-        return None
+    async def analyze(_analysis_id: UUID, _canonical_url: str) -> InventoryResult:
+        return inventory_result
 
-    asyncio.run(process_analysis(analysis.id, "delivery-1", sessions=test_sessions, work=acquire))
+    asyncio.run(process_analysis(analysis.id, "delivery-1", sessions=test_sessions, work=analyze))
     first_result = asyncio.run(_load_analysis(test_sessions, analysis.id))
-    asyncio.run(process_analysis(analysis.id, "delivery-2", sessions=test_sessions, work=acquire))
+    asyncio.run(process_analysis(analysis.id, "delivery-2", sessions=test_sessions, work=analyze))
     second_result = asyncio.run(_load_analysis(test_sessions, analysis.id))
 
     assert second_result.status is AnalysisStatus.COMPLETED
@@ -182,6 +199,7 @@ def test_terminal_task_retry_is_noop(
 
 def test_processing_task_redelivery_with_same_token_resumes(
     test_sessions: async_sessionmaker[AsyncSession],
+    inventory_result: InventoryResult,
 ) -> None:
     original_started_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
     analysis = asyncio.run(
@@ -195,11 +213,12 @@ def test_processing_task_redelivery_with_same_token_resumes(
     before_redelivery = asyncio.run(_load_analysis(test_sessions, analysis.id))
     calls = 0
 
-    async def acquire(_analysis_id: UUID, _canonical_url: str) -> None:
+    async def analyze(_analysis_id: UUID, _canonical_url: str) -> InventoryResult:
         nonlocal calls
         calls += 1
+        return inventory_result
 
-    asyncio.run(process_analysis(analysis.id, "delivery-1", sessions=test_sessions, work=acquire))
+    asyncio.run(process_analysis(analysis.id, "delivery-1", sessions=test_sessions, work=analyze))
 
     persisted = asyncio.run(_load_analysis(test_sessions, analysis.id))
     assert calls == 1
@@ -209,6 +228,7 @@ def test_processing_task_redelivery_with_same_token_resumes(
 
 def test_processing_task_with_different_token_is_noop(
     test_sessions: async_sessionmaker[AsyncSession],
+    inventory_result: InventoryResult,
 ) -> None:
     analysis = asyncio.run(
         _create_analysis(
@@ -219,12 +239,13 @@ def test_processing_task_with_different_token_is_noop(
     )
     calls = 0
 
-    async def acquire(_analysis_id: UUID, _canonical_url: str) -> None:
+    async def analyze(_analysis_id: UUID, _canonical_url: str) -> InventoryResult:
         nonlocal calls
         calls += 1
+        return inventory_result
 
     asyncio.run(
-        process_analysis(analysis.id, "duplicate-delivery", sessions=test_sessions, work=acquire)
+        process_analysis(analysis.id, "duplicate-delivery", sessions=test_sessions, work=analyze)
     )
 
     persisted = asyncio.run(_load_analysis(test_sessions, analysis.id))
@@ -255,6 +276,7 @@ class TrackingSessionFactory:
 
 def test_database_session_is_released_during_acquisition_and_claim_fields_are_consistent(
     test_sessions: async_sessionmaker[AsyncSession],
+    inventory_result: InventoryResult,
 ) -> None:
     analysis = asyncio.run(
         _create_analysis(
@@ -265,7 +287,7 @@ def test_database_session_is_released_during_acquisition_and_claim_fields_are_co
     )
     tracking_sessions = TrackingSessionFactory(test_sessions)
 
-    async def acquire(_analysis_id: UUID, _canonical_url: str) -> None:
+    async def analyze(_analysis_id: UUID, _canonical_url: str) -> InventoryResult:
         assert tracking_sessions.active_contexts == 0
         during_acquisition = await _load_analysis(test_sessions, analysis.id)
         assert during_acquisition.status is AnalysisStatus.PROCESSING
@@ -274,13 +296,14 @@ def test_database_session_is_released_during_acquisition_and_claim_fields_are_co
         assert during_acquisition.error_code is None
         assert during_acquisition.error_message is None
         assert during_acquisition.processing_token == "delivery-1"
+        return inventory_result
 
     asyncio.run(
         process_analysis(
             analysis.id,
             "delivery-1",
             sessions=tracking_sessions,
-            work=acquire,
+            work=analyze,
         )
     )
 
@@ -292,6 +315,7 @@ def test_database_session_is_released_during_acquisition_and_claim_fields_are_co
 
 def test_two_different_tokens_racing_only_run_the_owner(
     test_sessions: async_sessionmaker[AsyncSession],
+    inventory_result: InventoryResult,
 ) -> None:
     analysis = asyncio.run(_create_analysis(test_sessions))
     calls: list[str] = []
@@ -300,13 +324,15 @@ def test_two_different_tokens_racing_only_run_the_owner(
         owner_started = asyncio.Event()
         release_owner = asyncio.Event()
 
-        async def owner_work(_analysis_id: UUID, _canonical_url: str) -> None:
+        async def owner_work(_analysis_id: UUID, _canonical_url: str) -> InventoryResult:
             calls.append("owner")
             owner_started.set()
             await release_owner.wait()
+            return inventory_result
 
-        async def duplicate_work(_analysis_id: UUID, _canonical_url: str) -> None:
+        async def duplicate_work(_analysis_id: UUID, _canonical_url: str) -> InventoryResult:
             calls.append("duplicate")
+            return inventory_result
 
         owner_task = asyncio.create_task(
             process_analysis(
@@ -336,11 +362,12 @@ def test_two_different_tokens_racing_only_run_the_owner(
 @pytest.mark.parametrize("raises_failure", [False, True])
 def test_old_worker_cannot_finalize_after_processing_token_changes(
     test_sessions: async_sessionmaker[AsyncSession],
+    inventory_result: InventoryResult,
     raises_failure: bool,
 ) -> None:
     analysis = asyncio.run(_create_analysis(test_sessions))
 
-    async def replaced_owner(_analysis_id: UUID, _canonical_url: str) -> None:
+    async def replaced_owner(_analysis_id: UUID, _canonical_url: str) -> InventoryResult:
         async with test_sessions() as session:
             persisted = await session.get(Analysis, analysis.id)
             assert persisted is not None
@@ -348,6 +375,7 @@ def test_old_worker_cannot_finalize_after_processing_token_changes(
             await session.commit()
         if raises_failure:
             raise AcquisitionTimeout
+        return inventory_result
 
     asyncio.run(
         process_analysis(
@@ -370,7 +398,7 @@ def test_cleanup_failure_never_completes_analysis(
 ) -> None:
     analysis = asyncio.run(_create_analysis(test_sessions))
 
-    async def cleanup_failure(_analysis_id: UUID, _canonical_url: str) -> None:
+    async def cleanup_failure(_analysis_id: UUID, _canonical_url: str) -> NoReturn:
         raise CleanupFailed
 
     asyncio.run(
@@ -387,3 +415,9 @@ def test_cleanup_failure_never_completes_analysis(
     assert persisted.error_code == "cleanup_failed"
     assert persisted.error_message == "The temporary repository workspace could not be removed."
     assert persisted.processing_token is None
+
+    async def load_result() -> AnalysisResult | None:
+        async with test_sessions() as session:
+            return await session.get(AnalysisResult, analysis.id)
+
+    assert asyncio.run(load_result()) is None

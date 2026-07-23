@@ -8,9 +8,9 @@ RepoLens is not a wrapper that sends an entire codebase to an AI model. Determin
 
 ## Current delivery scope
 
-Stage 2 adds bounded, temporary repository acquisition to the durable Stage 1 lifecycle. It accepts and canonicalizes supported public GitHub repository URLs, persists repository identity and job state, and lets the worker shallow-clone only the stored canonical URL under strict process, filesystem, and container controls.
+The current Stage 3A delivery accepts and canonicalizes supported public GitHub repository URLs, persists repository identity and job state, and lets the worker shallow-clone only the stored canonical URL under strict process, filesystem, and container controls. While the temporary workspace exists, deterministic inventory produces bounded repository summary, language, important-file, technology, entry-point, and warning data.
 
-Stage 2 contacts GitHub only through a hardened HTTPS Git clone. The Docker worker is non-root, has a read-only root filesystem, no Linux capabilities, no-new-privileges, bounded writable tmpfs mounts, explicit resource limits, and separated data and egress networks. It does not inventory source, detect technologies, parse files, score projects, persist source, or invoke AI. The web repository URL field and action button remain intentionally non-functional; only the backend lifecycle and acquisition flow are implemented.
+The worker contacts GitHub only through a hardened HTTPS Git clone. It is non-root, has a read-only root filesystem, no Linux capabilities, no-new-privileges, bounded writable tmpfs mounts, explicit resource limits, and separated data and egress networks. It never executes repository content or persists source. Cleanup completes before the result and completed lifecycle transition are committed atomically. AST parsing, scoring, frontend integration, and AI remain unimplemented.
 
 ## Target users
 
@@ -91,6 +91,8 @@ The health score is an onboarding and readiness indicator, not an absolute judgm
 
 - Long-running analysis must use a background job rather than hold an HTTP request open.
 - Jobs and state transitions should be idempotent where retries can occur.
+- Result persistence and the completed transition must be atomic and processing-token owned.
+- Clone, inventory, and workspace cleanup must not hold a database row lock or long transaction.
 - Parser failures for one supported file must be isolated and represented without crashing the entire job.
 - Scoring rules, report schemas, and scoring versions must be documented and tested against fixed fixtures.
 - API errors and unsupported repositories must produce actionable, non-sensitive messages.

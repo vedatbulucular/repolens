@@ -80,7 +80,7 @@ Stage 2A uses a depth-one, single-branch Git clone and rejects all symbolic link
 
 ## Stage 3 — File inventory and technology detection
 
-**Status:** Stage 3A-1 and Stage 3A-2A are complete on `main`; Stage 3A-2B1 is in development on `feature/analysis-result-persistence-api`; worker integration remains deferred and the complete Stage 3A milestone is not yet implemented
+**Status:** Stage 3A is complete through Stage 3A-2B2
 
 ### Scope
 
@@ -92,7 +92,7 @@ Stage 2A uses a depth-one, single-branch Git clone and rejects all symbolic link
 - Detect bounded technology evidence and conservative entry points without ASTs.
 - Serialize bounded inventory results explicitly, persist at most one versioned JSONB result per analysis, and expose lifecycle-aware typed result reads.
 
-Stage 3A-2B1 adds persistence and API primitives only. The production worker still performs acquisition without invoking inventory or writing an analysis result. Worker integration and atomic result-plus-completion finalization remain a separately approved Stage 3A-2B2 task.
+Stage 3A-2B2 connects these modules to the production worker. Inventory runs inside the validated acquisition context; workspace cleanup finishes before a short processing-token-owned transaction persists the single result and marks the analysis completed.
 
 ### Acceptance criteria
 
@@ -100,6 +100,7 @@ Stage 3A-2B1 adds persistence and API primitives only. The production worker sti
 - Important documentation and configuration signals are reported with source paths.
 - Excluded, binary, oversized, and unsafe paths are skipped consistently.
 - Inventory work remains within configured resource limits.
+- Worker redelivery is idempotent, cleanup precedes finalization, and a completed analysis has exactly one result.
 
 ## Stage 4 — Python and TypeScript source parsing
 
