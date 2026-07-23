@@ -4,7 +4,12 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict
+from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, model_validator
+
+from repolens_api.code_structure.contracts import (
+    SOURCE_STRUCTURE_WARNING_MESSAGES,
+    SourceStructureWarningCode,
+)
 
 
 def _relative_path(value: str) -> str:
@@ -144,7 +149,7 @@ class InventoryWarningResponse(InventoryPayloadModel):
 
 
 class InventoryPayloadResponse(InventoryPayloadModel):
-    """Strict schema for supported persisted inventory payloads."""
+    """Strict schema for persisted version 1 inventory payloads."""
 
     repository_summary: RepositorySummaryResponse
     languages: list[LanguageStatisticResponse]
@@ -154,12 +159,125 @@ class InventoryPayloadResponse(InventoryPayloadModel):
     warnings: list[InventoryWarningResponse]
 
 
+class SourceLanguageFileCountResponse(InventoryPayloadModel):
+    """Supported source-file count for one language."""
+
+    language: str
+    file_count: int
+
+
+class CodeStructureSummaryResponse(InventoryPayloadModel):
+    """Typed repository-wide source-structure counters."""
+
+    supported_source_file_count: int
+    parsed_file_count: int
+    skipped_file_count: int
+    parse_error_file_count: int
+    total_symbol_count: int
+    total_function_count: int
+    total_class_count: int
+    total_method_count: int
+    total_import_count: int
+    language_file_counts: list[SourceLanguageFileCountResponse]
+
+
+class SourceFileStructureResponse(InventoryPayloadModel):
+    """Typed structural counters for one supported source file."""
+
+    relative_path: RelativePath
+    language: Literal["Python", "TypeScript", "JavaScript"]
+    category: str
+    line_count: int
+    symbol_count: int
+    import_count: int
+    class_count: int
+    function_count: int
+    method_count: int
+    parse_status: Literal["parsed", "partial", "failed", "skipped"]
+    has_syntax_errors: bool
+
+
+class SourceSymbolResponse(InventoryPayloadModel):
+    """Typed source declaration without its body or literal values."""
+
+    relative_path: RelativePath
+    language: Literal["Python", "TypeScript", "JavaScript"]
+    kind: Literal["function", "async_function", "class", "method", "async_method"]
+    name: str
+    qualified_name: str
+    start_line: int
+    end_line: int
+    parent_name: str | None
+    parameter_count: int
+    is_exported: bool
+    is_public: bool
+
+
+class SourceImportResponse(InventoryPayloadModel):
+    """Typed normalized import without its complete source statement."""
+
+    relative_path: RelativePath
+    language: Literal["Python", "TypeScript", "JavaScript"]
+    module: str
+    imported_names: list[str]
+    import_kind: Literal[
+        "python_import",
+        "python_from_import",
+        "ecmascript_import",
+        "commonjs_require",
+    ]
+    is_relative: bool
+    start_line: int
+
+
+class SourceStructureWarningResponse(InventoryPayloadModel):
+    """Typed safe source-analysis warning."""
+
+    code: Literal[
+        "source_parse_failed",
+        "source_syntax_error",
+        "unsupported_source_encoding",
+        "source_file_too_large",
+        "source_file_unreadable",
+        "source_symbols_truncated",
+        "source_imports_truncated",
+        "structure_warning_limit_reached",
+    ]
+    relative_path: RelativePath | None
+    message: str
+
+    @model_validator(mode="after")
+    def validate_fixed_message(self) -> "SourceStructureWarningResponse":
+        """Reject stored parser diagnostics or other non-contract warning text."""
+        code = SourceStructureWarningCode(self.code)
+        if self.message != SOURCE_STRUCTURE_WARNING_MESSAGES[code]:
+            raise ValueError("invalid source-structure warning message")
+        return self
+
+
+class CodeStructureResponse(InventoryPayloadModel):
+    """Strict persisted source-structure payload."""
+
+    summary: CodeStructureSummaryResponse
+    files: list[SourceFileStructureResponse]
+    symbols: list[SourceSymbolResponse]
+    imports: list[SourceImportResponse]
+    warnings: list[SourceStructureWarningResponse]
+
+
+class InventoryPayloadV2Response(InventoryPayloadResponse):
+    """Strict schema for version 2 inventory and source structure."""
+
+    code_structure: CodeStructureResponse
+
+
 class AnalysisResultResponse(InventoryPayloadResponse):
     """Completed analysis result with lifecycle and repository metadata."""
 
     analysis_id: UUID
     result_schema_version: int
     repository: RepositoryResponse
+    code_structure: CodeStructureResponse | None = None
     requested_at: AwareDatetime
     started_at: AwareDatetime | None
     completed_at: AwareDatetime | None

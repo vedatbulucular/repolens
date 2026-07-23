@@ -2,7 +2,7 @@
 
 import time
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from repolens_api.inventory.content import SafeContentReader
@@ -27,6 +27,14 @@ from repolens_api.inventory.technologies import detect_technologies
 INVENTORY_SCHEMA_VERSION = 1
 
 
+@dataclass(frozen=True, slots=True)
+class InventoryAnalysis:
+    """Persistable inventory result plus non-persisted safe file metadata."""
+
+    result: InventoryResult
+    files: tuple[FileInventoryEntry, ...]
+
+
 class InventoryService:
     """Build a bounded result without persisting or executing repository content."""
 
@@ -47,6 +55,10 @@ class InventoryService:
 
     def analyze(self, repository_root: Path) -> InventoryResult:
         """Return one logical inventory result or a safe fatal error."""
+        return self.analyze_with_files(repository_root).result
+
+    def analyze_with_files(self, repository_root: Path) -> InventoryAnalysis:
+        """Return the result with file metadata retained for in-workspace analyzers."""
         try:
             scan = self._scanner.scan(repository_root)
             languages = detect_languages(repository_root, scan.files, self._content_reader)
@@ -90,14 +102,17 @@ class InventoryService:
                     *entry_points.warnings,
                 )
             )
-            return InventoryResult(
-                schema_version=INVENTORY_SCHEMA_VERSION,
-                repository_summary=self._summary(scan, categorized_files),
-                languages=languages.statistics,
-                important_files=detect_important_files(categorized_files, scan.directories),
-                technologies=technologies.findings,
-                entry_points=entry_points.findings,
-                warnings=warnings,
+            return InventoryAnalysis(
+                result=InventoryResult(
+                    schema_version=INVENTORY_SCHEMA_VERSION,
+                    repository_summary=self._summary(scan, categorized_files),
+                    languages=languages.statistics,
+                    important_files=detect_important_files(categorized_files, scan.directories),
+                    technologies=technologies.findings,
+                    entry_points=entry_points.findings,
+                    warnings=warnings,
+                ),
+                files=categorized_files,
             )
         except InventoryError:
             raise

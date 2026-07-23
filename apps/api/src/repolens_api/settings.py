@@ -8,6 +8,7 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from repolens_api.acquisition.contracts import AcquisitionLimits
+from repolens_api.code_structure.contracts import SourceStructureLimits
 from repolens_api.inventory.contracts import InventoryLimits
 
 
@@ -45,6 +46,15 @@ class Settings(BaseSettings):
     max_technology_findings: int = 100
     max_technology_evidence_per_finding: int = 20
     max_entry_points: int = 100
+    source_parse_timeout_seconds: int = 30
+    max_source_file_bytes: int = 524_288
+    max_structure_files: int = 5_000
+    max_source_symbols: int = 20_000
+    max_source_imports: int = 20_000
+    max_symbols_per_file: int = 500
+    max_imports_per_file: int = 500
+    max_imported_names_per_import: int = 100
+    max_structure_warnings: int = 500
     max_result_bytes: int = 2_097_152
 
     @model_validator(mode="after")
@@ -99,6 +109,28 @@ class Settings(BaseSettings):
             raise ValueError("text read limit cannot exceed acquisition file limit")
         if self.binary_sample_bytes > self.max_text_read_bytes:
             raise ValueError("binary sample limit cannot exceed text read limit")
+
+        structure_limits = (
+            self.source_parse_timeout_seconds,
+            self.max_source_file_bytes,
+            self.max_structure_files,
+            self.max_source_symbols,
+            self.max_source_imports,
+            self.max_symbols_per_file,
+            self.max_imports_per_file,
+            self.max_imported_names_per_import,
+            self.max_structure_warnings,
+        )
+        if any(limit <= 0 for limit in structure_limits):
+            raise ValueError("source structure limits must be positive")
+        if self.max_source_file_bytes > self.max_file_bytes:
+            raise ValueError("source parse file limit cannot exceed acquisition file limit")
+        if self.max_structure_files > self.max_inventory_entries:
+            raise ValueError("structure file limit cannot exceed inventory entry limit")
+        if self.max_symbols_per_file > self.max_source_symbols:
+            raise ValueError("per-file symbol limit cannot exceed total symbol limit")
+        if self.max_imports_per_file > self.max_source_imports:
+            raise ValueError("per-file import limit cannot exceed total import limit")
         if self.max_result_bytes <= 0:
             raise ValueError("result byte limit must be positive")
         return self
@@ -131,6 +163,20 @@ class Settings(BaseSettings):
             max_technology_findings=self.max_technology_findings,
             max_technology_evidence_per_finding=self.max_technology_evidence_per_finding,
             max_entry_points=self.max_entry_points,
+        )
+
+    def source_structure_limits(self) -> SourceStructureLimits:
+        """Return the immutable limits used by source-structure analysis."""
+        return SourceStructureLimits(
+            timeout_seconds=self.source_parse_timeout_seconds,
+            max_source_file_bytes=self.max_source_file_bytes,
+            max_structure_files=self.max_structure_files,
+            max_source_symbols=self.max_source_symbols,
+            max_source_imports=self.max_source_imports,
+            max_symbols_per_file=self.max_symbols_per_file,
+            max_imports_per_file=self.max_imports_per_file,
+            max_imported_names_per_import=self.max_imported_names_per_import,
+            max_warnings=self.max_structure_warnings,
         )
 
 

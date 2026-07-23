@@ -2,11 +2,11 @@
 
 ## Document status
 
-- **Current milestone:** Stage 3A-2B2 — worker inventory and atomic result finalization
+- **Current milestone:** Stage 4 — safe source-structure analysis
 - **Last updated:** 2026-07-23
 - **Architecture style:** monorepo with a modular-monolith backend and a separate web application
 
-This document distinguishes the code that exists through Stage 3A from the target MVP architecture. A component described as planned must not be treated as implemented.
+This document distinguishes the code that exists through Stage 4 from the target MVP architecture. A component described as planned must not be treated as implemented.
 
 ## Architectural goals
 
@@ -19,9 +19,9 @@ RepoLens should remain understandable to a junior developer while creating stron
 - temporary source retention with guaranteed cleanup;
 - incremental delivery without premature microservices or shared packages.
 
-## Current Stage 3A architecture
+## Current Stage 4 architecture
 
-The current architecture keeps the web application independent and connects deterministic inventory to the hardened acquisition worker with cleanup-before-finalization:
+The current architecture keeps the web application independent and connects deterministic inventory and source parsing to the hardened acquisition worker with cleanup-before-finalization:
 
 ```mermaid
 flowchart LR
@@ -38,13 +38,14 @@ flowchart LR
     K --> G["Public github.com repository"]
     K --> T["Bounded temporary workspace"]
     K --> E["Deterministic inventory modules"]
-    E --> S["Explicit deterministic serializer"]
+    E --> Q["Bounded source-structure modules"]
+    Q --> S["Explicit deterministic serializer"]
     S -->|"Atomic result plus completed commit"| P
 ```
 
-The Next.js page still has a repository URL field and disabled action button; it does not call the API. FastAPI exposes `GET /health`, the analysis lifecycle endpoints, and `GET /api/v1/analyses/{analysis_id}/result`. The result endpoint returns typed persisted schema version 1 data only for a completed analysis. Queued and processing analyses return `analysis_not_ready`; failed analyses return `analysis_failed`; completed analyses without a result return the integrity error `analysis_result_missing`.
+The Next.js page still has a repository URL field and disabled action button; it does not call the API. FastAPI exposes `GET /health`, the analysis lifecycle endpoints, and `GET /api/v1/analyses/{analysis_id}/result`. New completed analyses return typed schema version 2 inventory and `code_structure` data. Existing schema version 1 rows remain readable with `code_structure: null`. Queued and processing analyses return `analysis_not_ready`; failed analyses return `analysis_failed`; completed analyses without a result return the integrity error `analysis_result_missing`.
 
-The API accepts only canonicalizable public HTTPS GitHub repository URLs, stores repository identities and analysis lifecycle records, and publishes work to Redis. The worker shallow-clones only the stored canonical URL, yields the validated repository root through a bounded async context, runs inventory while that context exists, and removes the temporary source before opening the result finalization transaction. A successful finalization persists `AnalysisResult` and changes the owned analysis to `completed` in one commit. Legacy completed rows without a result still report `analysis_result_missing`.
+The API accepts only canonicalizable public HTTPS GitHub repository URLs, stores repository identities and analysis lifecycle records, and publishes work to Redis. The worker shallow-clones only the stored canonical URL, yields the validated repository root through a bounded async context, runs inventory and supported-language structure analysis while that context exists, and removes the temporary source before opening the result finalization transaction. A successful finalization persists `AnalysisResult` and changes the owned analysis to `completed` in one commit. Legacy completed rows without a result still report `analysis_result_missing`.
 
 Alembic owns the PostgreSQL schema. SQLAlchemy's asynchronous engine and sessions are shared by the API and worker. Redis is transport only and is not a system of record.
 
@@ -66,7 +67,7 @@ stateDiagram-v2
     [*] --> queued
     queued --> processing: worker accepts job
     queued --> failed: dispatch or setup failure
-    processing --> completed: inventory, cleanup, and result commit succeed
+    processing --> completed: inventory, structure analysis, cleanup, and result commit succeed
     processing --> failed: deterministic work or cleanup fails safely
     completed --> [*]
     failed --> [*]
@@ -76,7 +77,7 @@ Terminal jobs are idempotent when redelivered. The transition policy blocks all 
 
 ### Deterministic result persistence
 
-`InventoryResult` remains an in-memory immutable contract. Explicit serialization selects only repository summary, language statistics, important-file signals, technology evidence, entry-point evidence, and safe warnings. Enums become string values and tuples become JSON arrays. The serializer rejects unsupported Python objects, non-finite floats, and absolute or traversing paths, then measures canonical UTF-8 JSON using sorted keys, fixed separators, and disabled NaN support.
+`InventoryResult` and `CodeStructureResult` remain in-memory immutable contracts. Explicit serialization selects only repository summary, language statistics, important-file signals, technology evidence, entry-point evidence, bounded declarations and imports, counters, and safe warnings. Enums become string values and tuples become JSON arrays. The serializer rejects unsupported Python objects, non-finite floats, and absolute or traversing paths, then measures canonical UTF-8 JSON using sorted keys, fixed separators, and disabled NaN support.
 
 The `analysis_results` table stores at most one result per analysis:
 
@@ -118,7 +119,7 @@ The API and worker will use modules from the same backend codebase and domain mo
 | File inventory | Record safe paths, sizes, extensions, exclusions, and a bounded directory tree. |
 | Technology detection | Identify languages and important configuration files from deterministic evidence. |
 | Documentation inspection | Inspect README, LICENSE, CONTRIBUTING, environment examples, and test documentation. |
-| Source parsing | Extract basic Python and TypeScript symbols using bounded, fault-tolerant Tree-sitter parsing. |
+| Source parsing | Extract bounded Python AST and TypeScript/JavaScript Tree-sitter declarations, imports, exports, counters, and safe warnings without executing source. |
 | Rule engine | Produce findings whose rule ID, severity, evidence, score impact, and recommendation are explicit. |
 | Scoring | Calculate versioned, deterministic category scores and a bounded total score. |
 | Reporting | Build one versioned report model used by the API, dashboard, JSON export, and Markdown export. |
@@ -128,7 +129,7 @@ The backend may introduce internal modules as these responsibilities become real
 
 ## Data flow
 
-Stages 1 through 3A implement steps 1-11 as one backend flow:
+Stages 1 through 4 implement steps 1-12 as one backend flow:
 
 1. The user submits a public GitHub repository URL.
 2. The API validates and canonicalizes the URL, then records an analysis request.
@@ -137,16 +138,17 @@ Stages 1 through 3A implement steps 1-11 as one backend flow:
 5. Acquisition disables repository hooks, prompts, credential helpers, submodules, LFS smudging, unsafe protocols, and redirects; time and workspace growth are bounded throughout the Git process.
 6. A security pass rejects limit violations, symbolic links, unsafe paths, and special files before inventory begins.
 7. Inventory derives bounded metadata, language, manifest, technology, and conservative entry-point evidence without executing repository code.
-8. The complete inventory result remains in memory while the acquisition context removes Git metadata and the temporary workspace.
-9. Only after cleanup succeeds, the explicit serializer produces a deterministic, size-limited schema version 1 payload without source bodies or dependency values.
-10. A short transaction verifies processing-token ownership, stores the single JSONB result, and marks the analysis completed atomically.
-11. The typed result endpoint reads the completed result. A deterministic fatal error records a safe failed state; a database finalization failure is raised for Celery redelivery.
-12. Future rules and scoring will extend the versioned result contract with evidence-backed findings and scores.
-13. The future web dashboard will poll the API and render completed results.
+8. The source-structure service consumes only supported safe inventory entries, uses Python AST or fixed TypeScript/JavaScript Tree-sitter grammars, and emits bounded declarations, imports, counters, and fixed warnings.
+9. The complete inventory and structure result remain in memory while the acquisition context removes Git metadata and the temporary workspace.
+10. Only after cleanup succeeds, the explicit serializer produces a deterministic, size-limited schema version 2 payload without source bodies, snippets, parser diagnostics, or dependency values.
+11. A short transaction verifies processing-token ownership, stores the single JSONB result, and marks the analysis completed atomically.
+12. The typed result endpoint reads both legacy version 1 and current version 2 results. A deterministic fatal error records a safe failed state; a database finalization failure is raised for Celery redelivery.
+13. Future rules and scoring will extend the versioned result contract with evidence-backed findings and scores.
+14. The future web dashboard will poll the API and render completed results.
 
 ## Data ownership and persistence
 
-The current schema stores canonical repository identity, analysis lifecycle metadata, a safe acquisition error code, an internal processing-delivery token, and at most one versioned deterministic result in `repositories`, `analyses`, and `analysis_results`. The full file inventory remains in memory; only bounded derived metadata and evidence can enter the explicit JSONB payload. Source files, workspace paths, processing tokens, dependency values, script commands, Git output, and repository snapshots are not stored in analysis results.
+The current schema stores canonical repository identity, analysis lifecycle metadata, a safe analysis error code, an internal processing-delivery token, and at most one versioned deterministic result in `repositories`, `analyses`, and `analysis_results`. The full file inventory and syntax trees remain in memory; only bounded derived metadata and evidence can enter the explicit JSONB payload. Source files, snippets, docstrings, literals, parser exceptions, workspace paths, processing tokens, dependency values, script commands, Git output, and repository snapshots are not stored in analysis results.
 
 Alembic migrations version the PostgreSQL schema. PostgreSQL is the system of record; Redis is used only for queue transport and transient coordination.
 

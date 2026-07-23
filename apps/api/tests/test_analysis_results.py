@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 
 from repolens_api.analysis_results import (
+    AnalysisOutput,
     AnalysisResultErrorCode,
     AnalysisResultSerializationError,
     deterministic_json_bytes,
@@ -40,6 +41,41 @@ def test_serializer_emits_only_explicit_json_compatible_fields(
     assert warnings[0]["code"] == "file_unreadable"
 
 
+def test_version_two_serializer_adds_only_typed_code_structure(
+    analysis_output: AnalysisOutput,
+) -> None:
+    payload = serialize_inventory_result(analysis_output)
+
+    assert set(payload) == {
+        "repository_summary",
+        "languages",
+        "important_files",
+        "technologies",
+        "entry_points",
+        "warnings",
+        "code_structure",
+    }
+    structure = cast(dict[str, object], payload["code_structure"])
+    assert set(structure) == {"summary", "files", "symbols", "imports", "warnings"}
+    symbols = cast(list[dict[str, object]], structure["symbols"])
+    imports = cast(list[dict[str, object]], structure["imports"])
+    assert symbols[0] == {
+        "relative_path": "src/main.py",
+        "language": "Python",
+        "kind": "function",
+        "name": "create_app",
+        "qualified_name": "create_app",
+        "start_line": 3,
+        "end_line": 4,
+        "parent_name": None,
+        "parameter_count": 0,
+        "is_exported": False,
+        "is_public": True,
+    }
+    assert imports[0]["module"] == "fastapi"
+    assert imports[0]["imported_names"] == ["FastAPI"]
+
+
 def test_deterministic_json_bytes_are_equal_for_the_same_logical_result(
     inventory_result: InventoryResult,
 ) -> None:
@@ -49,6 +85,27 @@ def test_deterministic_json_bytes_are_equal_for_the_same_logical_result(
     assert first.payload == second.payload
     assert first.json_bytes == second.json_bytes
     assert first.json_bytes == deterministic_json_bytes(first.payload)
+
+
+def test_version_two_serialization_is_deterministic(
+    analysis_output: AnalysisOutput,
+) -> None:
+    first = prepare_inventory_result(analysis_output, max_result_bytes=20_000)
+    second = prepare_inventory_result(analysis_output, max_result_bytes=20_000)
+
+    assert first.schema_version == 2
+    assert first.json_bytes == second.json_bytes
+
+
+def test_legacy_result_cannot_claim_version_two_without_structure(
+    inventory_result: InventoryResult,
+) -> None:
+    invalid = replace(inventory_result, schema_version=2)
+
+    with pytest.raises(AnalysisResultSerializationError) as raised:
+        prepare_inventory_result(invalid, max_result_bytes=10_000)
+
+    assert raised.value.code is AnalysisResultErrorCode.RESULT_SERIALIZATION_FAILED
 
 
 @pytest.mark.parametrize("percentage", [float("nan"), float("inf"), float("-inf")])
@@ -115,6 +172,59 @@ def test_serializer_output_contains_no_forbidden_source_values(
         "C:\\private",
     ):
         assert forbidden not in serialized
+
+
+def test_version_two_output_contains_no_source_bodies_or_system_paths(
+    analysis_output: AnalysisOutput,
+) -> None:
+    serialized = prepare_inventory_result(
+        analysis_output,
+        max_result_bytes=20_000,
+    ).json_bytes.decode("utf-8")
+
+    for forbidden in (
+        "PRIVATE_SOURCE_BODY",
+        "processing-token-private",
+        "/tmp/repolens-workspaces",
+        r"C:\private",
+    ):
+        assert forbidden not in serialized
+
+
+@pytest.mark.parametrize(
+    "unsafe_path",
+    ["/tmp/private.py", r"C:\private.py", "../outside.py"],
+)
+def test_version_two_serializer_rejects_unsafe_source_paths(
+    analysis_output: AnalysisOutput,
+    unsafe_path: str,
+) -> None:
+    structure = analysis_output.code_structure
+    unsafe_file = replace(structure.files[0], relative_path=unsafe_path)
+    unsafe_output = replace(
+        analysis_output,
+        code_structure=replace(structure, files=(unsafe_file,)),
+    )
+
+    with pytest.raises(AnalysisResultSerializationError):
+        serialize_inventory_result(unsafe_output)
+
+
+def test_version_two_serializer_rejects_non_contract_warning_message(
+    analysis_output: AnalysisOutput,
+) -> None:
+    structure = analysis_output.code_structure
+    unsafe_warning = replace(
+        structure.warnings[0],
+        message="PRIVATE parser exception and source line",
+    )
+    unsafe_output = replace(
+        analysis_output,
+        code_structure=replace(structure, warnings=(unsafe_warning,)),
+    )
+
+    with pytest.raises(AnalysisResultSerializationError):
+        serialize_inventory_result(unsafe_output)
 
 
 def test_result_size_limit_is_all_or_nothing(
