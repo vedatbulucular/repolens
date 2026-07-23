@@ -1,1 +1,1 @@
-"""Deterministic, metadata-only repository inventory."""
+"""Deterministic, bounded repository inventory and evidence detection."""

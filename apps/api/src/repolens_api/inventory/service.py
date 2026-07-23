@@ -1,4 +1,4 @@
-"""Orchestration for one deterministic Stage 3A-1 inventory."""
+"""Orchestration for one deterministic Stage 3A inventory."""
 
 import time
 from collections.abc import Callable
@@ -15,11 +15,14 @@ from repolens_api.inventory.contracts import (
     InventoryWarningCode,
     RepositorySummary,
 )
+from repolens_api.inventory.entrypoints import detect_entry_points
 from repolens_api.inventory.errors import InventoryError, RepositoryAnalysisFailed
 from repolens_api.inventory.important_files import detect_important_files
 from repolens_api.inventory.languages import detect_languages
+from repolens_api.inventory.manifests import extract_manifest_facts
 from repolens_api.inventory.policy import categorize_file, path_sort_key
 from repolens_api.inventory.scanner import RepositoryScan, RepositoryScanner
+from repolens_api.inventory.technologies import detect_technologies
 
 INVENTORY_SCHEMA_VERSION = 1
 
@@ -58,12 +61,42 @@ class InventoryService:
                 )
                 for entry in languages.files
             )
-            warnings = self._bounded_warnings((*scan.warnings, *languages.warnings))
+            manifests = extract_manifest_facts(
+                repository_root,
+                categorized_files,
+                self._content_reader,
+                self._limits,
+            )
+            technologies = detect_technologies(
+                manifests.facts,
+                scan.directories,
+                self._limits,
+            )
+            entry_points = detect_entry_points(
+                repository_root,
+                categorized_files,
+                scan.directories,
+                manifests.facts,
+                technologies.findings,
+                self._content_reader,
+                self._limits,
+            )
+            warnings = self._bounded_warnings(
+                (
+                    *scan.warnings,
+                    *languages.warnings,
+                    *manifests.warnings,
+                    *technologies.warnings,
+                    *entry_points.warnings,
+                )
+            )
             return InventoryResult(
                 schema_version=INVENTORY_SCHEMA_VERSION,
                 repository_summary=self._summary(scan, categorized_files),
                 languages=languages.statistics,
                 important_files=detect_important_files(categorized_files, scan.directories),
+                technologies=technologies.findings,
+                entry_points=entry_points.findings,
                 warnings=warnings,
             )
         except InventoryError:
