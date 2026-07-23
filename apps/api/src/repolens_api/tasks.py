@@ -8,22 +8,29 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from repolens_api.acquisition.errors import AcquisitionError, AcquisitionErrorCode
+from repolens_api.acquisition.errors import AcquisitionError
 from repolens_api.acquisition.git import GitRepositoryClient
 from repolens_api.acquisition.processes import SubprocessRunner
 from repolens_api.acquisition.service import RepositoryAcquisitionService
 from repolens_api.acquisition.workspace import WorkspaceManager
+from repolens_api.analysis_results import (
+    AnalysisResultPersistenceError,
+    AnalysisResultSerializationError,
+)
 from repolens_api.celery_app import celery_app
 from repolens_api.database import create_engine, session_factory
+from repolens_api.inventory.contracts import InventoryResult
+from repolens_api.inventory.errors import InventoryError, RepositoryAnalysisFailed
+from repolens_api.inventory.service import INVENTORY_SCHEMA_VERSION, InventoryService
 from repolens_api.repository_urls import InvalidRepositoryUrl, parse_repository_url
 from repolens_api.services import (
     claim_analysis_for_processing,
-    complete_claimed_analysis,
     fail_claimed_analysis,
+    finalize_analysis_with_result,
 )
 from repolens_api.settings import get_settings
 
-AcquisitionWork = Callable[[UUID, str], Awaitable[None]]
+AnalysisWork = Callable[[UUID, str], Awaitable[InventoryResult]]
 SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
 
@@ -39,15 +46,17 @@ class BoundCeleryTask(Protocol):
     request: CeleryTaskRequest
 
 
-async def _acquire_repository(analysis_id: UUID, canonical_url: str) -> None:
-    """Build the production acquisition service for one task event loop."""
+async def _analyze_repository(analysis_id: UUID, canonical_url: str) -> InventoryResult:
+    """Acquire and inventory one repository before its workspace is removed."""
     settings = get_settings()
-    service = RepositoryAcquisitionService(
+    acquisition = RepositoryAcquisitionService(
         workspaces=WorkspaceManager(settings.workspace_root),
         git=GitRepositoryClient(SubprocessRunner()),
         limits=settings.acquisition_limits(),
     )
-    await service.acquire(analysis_id, canonical_url)
+    inventory = InventoryService(settings.inventory_limits())
+    async with acquisition.acquire_workspace(analysis_id, canonical_url) as repository_root:
+        return inventory.analyze(repository_root)
 
 
 async def process_analysis(
@@ -55,9 +64,9 @@ async def process_analysis(
     processing_token: str,
     *,
     sessions: SessionFactory = session_factory,
-    work: AcquisitionWork = _acquire_repository,
+    work: AnalysisWork = _analyze_repository,
 ) -> None:
-    """Claim, acquire, clean, and finish one analysis idempotently."""
+    """Claim, analyze, clean, and atomically finalize one analysis."""
     async with sessions() as claim_session:
         claim = await claim_analysis_for_processing(
             claim_session,
@@ -74,30 +83,64 @@ async def process_analysis(
             raise AcquisitionError from exc
         if identity.canonical_url != claim.repository.canonical_url:
             raise AcquisitionError
-        await work(claim.id, claim.repository.canonical_url)
-    except AcquisitionError as exc:
-        async with sessions() as failure_session:
-            await fail_claimed_analysis(
-                failure_session,
-                analysis_id,
-                processing_token,
-                error_code=exc.code.value,
-                error_message=exc.public_message,
-            )
+        inventory_result = await work(claim.id, claim.repository.canonical_url)
+    except (AcquisitionError, InventoryError) as exc:
+        await _record_failure(
+            sessions,
+            analysis_id,
+            processing_token,
+            error_code=exc.code.value,
+            error_message=exc.public_message,
+        )
         return
     except Exception:
-        async with sessions() as failure_session:
-            await fail_claimed_analysis(
-                failure_session,
-                analysis_id,
-                processing_token,
-                error_code=AcquisitionErrorCode.ACQUISITION_FAILED.value,
-                error_message="Repository acquisition failed.",
-            )
+        failure = RepositoryAnalysisFailed()
+        await _record_failure(
+            sessions,
+            analysis_id,
+            processing_token,
+            error_code=failure.code.value,
+            error_message=failure.public_message,
+        )
         return
 
-    async with sessions() as completion_session:
-        await complete_claimed_analysis(completion_session, analysis_id, processing_token)
+    settings = get_settings()
+    try:
+        async with sessions() as finalization_session:
+            await finalize_analysis_with_result(
+                finalization_session,
+                analysis_id,
+                processing_token,
+                inventory_result,
+                schema_version=INVENTORY_SCHEMA_VERSION,
+                max_result_bytes=settings.max_result_bytes,
+            )
+    except (AnalysisResultSerializationError, AnalysisResultPersistenceError) as exc:
+        await _record_failure(
+            sessions,
+            analysis_id,
+            processing_token,
+            error_code=exc.code.value,
+            error_message=exc.public_message,
+        )
+
+
+async def _record_failure(
+    sessions: SessionFactory,
+    analysis_id: UUID,
+    processing_token: str,
+    *,
+    error_code: str,
+    error_message: str,
+) -> None:
+    async with sessions() as failure_session:
+        await fail_claimed_analysis(
+            failure_session,
+            analysis_id,
+            processing_token,
+            error_code=error_code,
+            error_message=error_message,
+        )
 
 
 async def _process_with_task_engine(analysis_id: UUID, processing_token: str) -> None:

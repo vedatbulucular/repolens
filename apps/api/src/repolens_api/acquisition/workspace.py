@@ -97,7 +97,15 @@ class WorkspaceManager:
     async def temporary_workspace(self, analysis_id: UUID) -> AsyncIterator[Workspace]:
         """Yield a fresh workspace and remove it on every exit path."""
         workspace = self.prepare(analysis_id)
+        body_error: BaseException | None = None
         try:
             yield workspace
+        except BaseException as exc:
+            body_error = exc
+            raise
         finally:
-            self.cleanup(workspace)
+            try:
+                self.cleanup(workspace)
+            except CleanupFailed:
+                if body_error is None:
+                    raise

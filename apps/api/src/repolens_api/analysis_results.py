@@ -16,6 +16,7 @@ class AnalysisResultErrorCode(StrEnum):
 
     RESULT_SERIALIZATION_FAILED = "result_serialization_failed"
     RESULT_TOO_LARGE = "result_too_large"
+    RESULT_PERSISTENCE_FAILED = "result_persistence_failed"
 
 
 class AnalysisResultSerializationError(Exception):
@@ -28,6 +29,16 @@ class AnalysisResultSerializationError(Exception):
             if code is AnalysisResultErrorCode.RESULT_TOO_LARGE
             else "The analysis result could not be serialized safely."
         )
+        super().__init__(self.public_message)
+
+
+class AnalysisResultPersistenceError(Exception):
+    """Sanitized non-database persistence failure."""
+
+    code = AnalysisResultErrorCode.RESULT_PERSISTENCE_FAILED
+    public_message = "The analysis result could not be persisted."
+
+    def __init__(self) -> None:
         super().__init__(self.public_message)
 
 

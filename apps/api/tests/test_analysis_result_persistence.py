@@ -2,20 +2,23 @@
 
 import asyncio
 from dataclasses import replace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import delete, func, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from repolens_api import services
 from repolens_api.analysis_results import (
     AnalysisResultErrorCode,
     AnalysisResultSerializationError,
+    SerializedInventoryResult,
 )
 from repolens_api.inventory.contracts import InventoryResult
 from repolens_api.models import Analysis, AnalysisResult, AnalysisStatus, Repository
 from repolens_api.services import (
+    finalize_analysis_with_result,
     get_analysis_result_record,
     persist_inventory_result,
 )
@@ -381,6 +384,116 @@ def test_persistence_failure_writes_no_partial_result(
                 )
             if failure_kind == "size":
                 assert raised.value.code is AnalysisResultErrorCode.RESULT_TOO_LARGE
+            assert await session.get(AnalysisResult, analysis.id) is None
+
+    asyncio.run(exercise())
+
+
+def test_finalization_atomically_persists_result_and_completes_analysis(
+    test_sessions: async_sessionmaker[AsyncSession],
+    inventory_result: InventoryResult,
+) -> None:
+    async def exercise() -> None:
+        analysis = await _create_analysis(
+            test_sessions,
+            status=AnalysisStatus.PROCESSING,
+            processing_token="delivery-owner",
+        )
+        async with test_sessions() as session:
+            finalized = await finalize_analysis_with_result(
+                session,
+                analysis.id,
+                "delivery-owner",
+                inventory_result,
+                schema_version=1,
+                max_result_bytes=10_000,
+            )
+            assert finalized is True
+
+        async with test_sessions() as session:
+            persisted_analysis = await session.get(Analysis, analysis.id)
+            persisted_result = await session.get(AnalysisResult, analysis.id)
+            assert persisted_analysis is not None
+            assert persisted_analysis.status is AnalysisStatus.COMPLETED
+            assert persisted_analysis.completed_at is not None
+            assert persisted_analysis.processing_token is None
+            assert persisted_analysis.error_code is None
+            assert persisted_result is not None
+
+    asyncio.run(exercise())
+
+
+def test_finalization_rejects_stale_token_without_writing(
+    test_sessions: async_sessionmaker[AsyncSession],
+    inventory_result: InventoryResult,
+) -> None:
+    async def exercise() -> None:
+        analysis = await _create_analysis(
+            test_sessions,
+            status=AnalysisStatus.PROCESSING,
+            processing_token="current-owner",
+        )
+        async with test_sessions() as session:
+            finalized = await finalize_analysis_with_result(
+                session,
+                analysis.id,
+                "stale-owner",
+                inventory_result,
+                schema_version=1,
+                max_result_bytes=10_000,
+            )
+            assert finalized is False
+
+        async with test_sessions() as session:
+            persisted_analysis = await session.get(Analysis, analysis.id)
+            assert persisted_analysis is not None
+            assert persisted_analysis.status is AnalysisStatus.PROCESSING
+            assert persisted_analysis.processing_token == "current-owner"
+            assert await session.get(AnalysisResult, analysis.id) is None
+
+    asyncio.run(exercise())
+
+
+def test_finalization_database_failure_rolls_back_result_and_completion(
+    test_sessions: async_sessionmaker[AsyncSession],
+    inventory_result: InventoryResult,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_upsert = services._upsert_prepared_result
+
+    async def fail_after_upsert(
+        session: AsyncSession,
+        analysis_id: UUID,
+        prepared: SerializedInventoryResult,
+    ) -> AnalysisResult:
+        await original_upsert(session, analysis_id, prepared)
+        raise SQLAlchemyError("private database detail")
+
+    monkeypatch.setattr(services, "_upsert_prepared_result", fail_after_upsert)
+
+    async def exercise() -> None:
+        analysis = await _create_analysis(
+            test_sessions,
+            status=AnalysisStatus.PROCESSING,
+            processing_token="delivery-owner",
+        )
+        async with test_sessions() as session:
+            with pytest.raises(SQLAlchemyError, match="private database detail"):
+                await finalize_analysis_with_result(
+                    session,
+                    analysis.id,
+                    "delivery-owner",
+                    inventory_result,
+                    schema_version=1,
+                    max_result_bytes=10_000,
+                )
+
+        async with test_sessions() as session:
+            persisted_analysis = await session.get(Analysis, analysis.id)
+            assert persisted_analysis is not None
+            assert persisted_analysis.status is AnalysisStatus.PROCESSING
+            assert persisted_analysis.completed_at is None
+            assert persisted_analysis.processing_token == "delivery-owner"
             assert await session.get(AnalysisResult, analysis.id) is None
 
     asyncio.run(exercise())
