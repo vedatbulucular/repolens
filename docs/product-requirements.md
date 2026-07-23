@@ -8,9 +8,9 @@ RepoLens is not a wrapper that sends an entire codebase to an AI model. Determin
 
 ## Current delivery scope
 
-The current Stage 3A delivery accepts and canonicalizes supported public GitHub repository URLs, persists repository identity and job state, and lets the worker shallow-clone only the stored canonical URL under strict process, filesystem, and container controls. While the temporary workspace exists, deterministic inventory produces bounded repository summary, language, important-file, technology, entry-point, and warning data.
+The current Stage 4 delivery accepts and canonicalizes supported public GitHub repository URLs, persists repository identity and job state, and lets the worker shallow-clone only the stored canonical URL under strict process, filesystem, and container controls. While the temporary workspace exists, deterministic inventory produces bounded repository summary, language, important-file, technology, entry-point, and warning data. Bounded parsers then derive Python, TypeScript, and JavaScript declarations, imports, reliable export signals, file counters, and safe parse warnings.
 
-The worker contacts GitHub only through a hardened HTTPS Git clone. It is non-root, has a read-only root filesystem, no Linux capabilities, no-new-privileges, bounded writable tmpfs mounts, explicit resource limits, and separated data and egress networks. It never executes repository content or persists source. Cleanup completes before the result and completed lifecycle transition are committed atomically. AST parsing, scoring, frontend integration, and AI remain unimplemented.
+The worker contacts GitHub only through a hardened HTTPS Git clone. It is non-root, has a read-only root filesystem, no Linux capabilities, no-new-privileges, bounded writable tmpfs mounts, explicit resource limits, and separated data and egress networks. It never imports or executes repository content and never persists source text. Cleanup completes before the schema version 2 result and completed lifecycle transition are committed atomically. Schema version 1 results remain readable. Scoring, frontend integration, and AI remain unimplemented.
 
 ## Target users
 
@@ -44,8 +44,8 @@ The worker contacts GitHub only through a hardened HTTPS Git clone. It is non-ro
 - **FR-05:** Produce a bounded folder and file inventory without following unsafe symbolic links.
 - **FR-06:** Identify programming languages, important configuration files, likely application entry points, and technology signals from concrete file evidence.
 - **FR-07:** Inspect README, LICENSE, CONTRIBUTING, test files or configuration, and `.env.example`-style documentation signals.
-- **FR-08:** Extract basic classes and functions from supported Python and TypeScript files using Tree-sitter.
-- **FR-09:** Derive basic module-dependency and code-organization signals within the explicitly supported languages.
+- **FR-08:** Extract bounded classes, functions, methods, imports, and reliable export signals from supported Python, TypeScript, and JavaScript files without executing them.
+- **FR-09:** Derive basic module-dependency and code-organization metadata within the explicitly supported languages.
 - **FR-10:** Generate deterministic documentation, project-readiness, code-organization, and maintainability findings.
 - **FR-11:** Attach a stable rule ID, category, severity, description, machine-readable evidence, bounded score impact, and recommendation to every finding.
 
@@ -65,7 +65,7 @@ A completed report should include:
 - schema and scoring versions;
 - file counts, languages, technology signals, important files, and likely entry points;
 - documentation and test-readiness signals;
-- supported Python and TypeScript symbols and basic module relationships;
+- supported Python, TypeScript, and JavaScript symbols and basic module relationships;
 - category scores and a bounded overall health score;
 - evidence-backed findings and prioritized recommendations;
 - onboarding guidance based only on verified analysis facts;
@@ -116,7 +116,7 @@ The MVP is usable when a person can submit a supported public GitHub URL, observ
 - Automatic GitHub issue creation
 - Executing repository code, dependencies, tests, or builds in any sandbox
 - Advanced SAST, secret scanning, malware detection, or vulnerability assessment
-- Deep syntax analysis beyond the first supported Python and TypeScript scope
+- Deep syntax analysis beyond the first supported Python, TypeScript, and JavaScript scope
 - Sending a complete repository to an AI model
 - AI chat or ungrounded AI-generated findings
 - Long-term source-code or full-repository snapshot storage

@@ -20,6 +20,7 @@ from repolens_api.schemas import (
     AnalysisResponse,
     AnalysisResultResponse,
     InventoryPayloadResponse,
+    InventoryPayloadV2Response,
     RepositoryResponse,
 )
 from repolens_api.services import (
@@ -68,7 +69,11 @@ def _analysis_result_response(
     result: AnalysisResult,
 ) -> AnalysisResultResponse:
     try:
-        payload = InventoryPayloadResponse.model_validate(result.payload)
+        payload = (
+            InventoryPayloadV2Response.model_validate(result.payload)
+            if result.schema_version == 2
+            else InventoryPayloadResponse.model_validate(result.payload)
+        )
     except ValidationError:
         raise problem(
             type_="analysis_result_invalid",
@@ -87,6 +92,9 @@ def _analysis_result_response(
         technologies=payload.technologies,
         entry_points=payload.entry_points,
         warnings=payload.warnings,
+        code_structure=(
+            payload.code_structure if isinstance(payload, InventoryPayloadV2Response) else None
+        ),
         requested_at=_as_utc(analysis.requested_at),
         started_at=_optional_as_utc(analysis.started_at),
         completed_at=_optional_as_utc(analysis.completed_at),

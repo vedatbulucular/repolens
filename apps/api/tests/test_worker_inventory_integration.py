@@ -15,7 +15,19 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from repolens_api import tasks
-from repolens_api.analysis_results import AnalysisResultPersistenceError
+from repolens_api.analysis_results import (
+    AnalysisOutput,
+    AnalysisResultPersistenceError,
+    PersistableAnalysisResult,
+)
+from repolens_api.code_structure.contracts import CodeStructureResult, SourceStructureLimits
+from repolens_api.code_structure.errors import (
+    SourceStructureError,
+    SourceStructureFailed,
+    SourceStructureLimitExceeded,
+    SourceStructureTimeout,
+    UnsafeSourcePath,
+)
 from repolens_api.inventory.contracts import InventoryLimits, InventoryResult
 from repolens_api.inventory.errors import (
     InventoryError,
@@ -24,6 +36,7 @@ from repolens_api.inventory.errors import (
     RepositoryAnalysisFailed,
     UnsafeRepositoryPath,
 )
+from repolens_api.inventory.service import InventoryAnalysis
 from repolens_api.models import Analysis, AnalysisResult, AnalysisStatus, Repository
 from repolens_api.settings import Settings
 from repolens_api.tasks import process_analysis
@@ -78,10 +91,12 @@ async def _load_state(
 def test_production_work_keeps_repository_until_inventory_then_cleans(
     tmp_path: Path,
     inventory_result: InventoryResult,
+    code_structure_result: CodeStructureResult,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
     observed_limits: list[InventoryLimits] = []
+    observed_structure_limits: list[SourceStructureLimits] = []
     repository_root = tmp_path / "repository"
 
     class FixtureAcquisitionService:
@@ -103,17 +118,33 @@ def test_production_work_keeps_repository_until_inventory_then_cleans(
                 repository_root.rmdir()
 
     class FixtureInventoryService:
-        def __init__(self, limits: InventoryLimits) -> None:
+        def __init__(self, limits: InventoryLimits, **_kwargs: object) -> None:
             observed_limits.append(limits)
 
-        def analyze(self, received_root: Path) -> InventoryResult:
+        def analyze_with_files(self, received_root: Path) -> InventoryAnalysis:
             assert received_root == repository_root
             assert repository_root.is_dir()
             events.append("inventory")
-            return inventory_result
+            return InventoryAnalysis(result=inventory_result, files=())
+
+    class FixtureCodeStructureService:
+        def __init__(self, limits: SourceStructureLimits, **_kwargs: object) -> None:
+            observed_structure_limits.append(limits)
+
+        def analyze(
+            self,
+            received_root: Path,
+            files: object,
+        ) -> CodeStructureResult:
+            assert received_root == repository_root
+            assert repository_root.is_dir()
+            assert files == ()
+            events.append("structure")
+            return code_structure_result
 
     monkeypatch.setattr(tasks, "RepositoryAcquisitionService", FixtureAcquisitionService)
     monkeypatch.setattr(tasks, "InventoryService", FixtureInventoryService)
+    monkeypatch.setattr(tasks, "CodeStructureService", FixtureCodeStructureService)
 
     result = asyncio.run(
         tasks._analyze_repository(
@@ -122,9 +153,13 @@ def test_production_work_keeps_repository_until_inventory_then_cleans(
         )
     )
 
-    assert result is inventory_result
-    assert events == ["acquired", "inventory", "cleanup"]
+    assert isinstance(result, AnalysisOutput)
+    assert result.schema_version == 2
+    assert result.inventory is inventory_result
+    assert result.code_structure is code_structure_result
+    assert events == ["acquired", "inventory", "structure", "cleanup"]
     assert observed_limits == [Settings().inventory_limits()]
+    assert observed_structure_limits == [Settings().source_structure_limits()]
     assert not repository_root.exists()
 
 
@@ -135,11 +170,15 @@ def test_production_work_keeps_repository_until_inventory_then_cleans(
         (InventoryLimitExceeded(), "inventory_limit_exceeded"),
         (UnsafeRepositoryPath(), "unsafe_repository_path"),
         (InventoryTimeout(), "inventory_timeout"),
+        (SourceStructureFailed(), "source_structure_failed"),
+        (SourceStructureLimitExceeded(), "source_structure_limit_exceeded"),
+        (SourceStructureTimeout(), "source_structure_timeout"),
+        (UnsafeSourcePath(), "unsafe_source_path"),
     ],
 )
-def test_worker_records_safe_fatal_inventory_errors_without_result(
+def test_worker_records_safe_fatal_analysis_errors_without_result(
     test_sessions: async_sessionmaker[AsyncSession],
-    failure: InventoryError,
+    failure: InventoryError | SourceStructureError,
     expected_code: str,
 ) -> None:
     analysis = asyncio.run(_create_analysis(test_sessions))
@@ -375,12 +414,12 @@ def test_commit_redelivery_is_noop_and_keeps_single_result(
 def test_real_worker_result_is_available_through_typed_endpoint(
     api_client: TestClient,
     test_sessions: async_sessionmaker[AsyncSession],
-    inventory_result: InventoryResult,
+    analysis_output: AnalysisOutput,
 ) -> None:
     analysis = asyncio.run(_create_analysis(test_sessions))
 
-    async def analyze(_analysis_id: UUID, _canonical_url: str) -> InventoryResult:
-        return inventory_result
+    async def analyze(_analysis_id: UUID, _canonical_url: str) -> PersistableAnalysisResult:
+        return analysis_output
 
     asyncio.run(
         process_analysis(
@@ -401,6 +440,9 @@ def test_real_worker_result_is_available_through_typed_endpoint(
     assert body["technologies"][0]["name"] == "FastAPI"
     assert body["entry_points"][0]["relative_path"] == "src/main.py"
     assert body["warnings"][0]["code"] == "file_unreadable"
+    assert body["result_schema_version"] == 2
+    assert body["code_structure"]["symbols"][0]["name"] == "create_app"
+    assert body["code_structure"]["imports"][0]["module"] == "fastapi"
     for forbidden in (
         "delivery-owner",
         "/tmp/repolens-workspaces",

@@ -14,9 +14,9 @@ RepoLens is intended to help students, junior developers, open-source maintainer
 
 ## Development status
 
-RepoLens has completed **Stage 3A: deterministic repository inventory and technology detection**. The repository contains the Stage 0 foundation, the Stage 1 analysis lifecycle, hardened temporary repository acquisition, and a Celery worker that produces and persists a bounded inventory result.
+RepoLens has completed **Stage 4: safe source-structure analysis**. The repository contains the Stage 0 foundation, the Stage 1 analysis lifecycle, hardened temporary repository acquisition, deterministic inventory and technology detection, and bounded Python, TypeScript, and JavaScript structure extraction.
 
-The worker now inventories regular files, detects languages, parses allowlisted manifest facts, and derives bounded technology and conservative entry-point evidence. It does not perform AST or Tree-sitter parsing, quality scoring, vulnerability analysis, or AI processing. It never runs repository hooks, scripts, dependencies, tests, builds, or entry points. Acquired source and Git metadata are removed before the result and completed state are committed. The landing-page URL field and **Analyze Repository** button remain intentionally non-functional.
+The worker inventories regular files, detects languages, parses allowlisted manifest facts, derives bounded technology and conservative entry-point evidence, and extracts declarations and imports from supported source files. Python uses the standard-library AST; TypeScript and JavaScript use pinned Tree-sitter grammars. Parsers never import or evaluate repository modules, and results never retain source bodies, snippets, docstrings, literals, decorator content, or default values. Quality scoring, vulnerability analysis, AI processing, and frontend API integration remain unimplemented. Acquired source and Git metadata are removed before the result and completed state are committed.
 
 ## Technology stack
 
@@ -24,14 +24,14 @@ The worker now inventories regular files, detects languages, parses allowlisted 
 | --- | --- |
 | Web | Next.js, React, TypeScript, Tailwind CSS |
 | Web quality | ESLint, TypeScript, Vitest, Testing Library |
-| API | FastAPI, Python, Pydantic Settings, SQLAlchemy, Alembic |
+| API | FastAPI, Python, Pydantic Settings, SQLAlchemy, Alembic, Python AST, Tree-sitter |
 | API quality | Ruff, mypy, pytest |
 | Package management | pnpm for the web app, uv for the API |
 | Persistence and jobs | PostgreSQL, Redis, and Celery |
 | Local infrastructure | Docker Compose |
 | Continuous integration | GitHub Actions |
 
-Tree-sitter source parsing, scoring, findings, reports, and AI explanations remain planned; they are not part of the current implementation.
+Scoring, findings, final reports, frontend integration, and AI explanations remain planned; they are not part of the current implementation.
 
 ## Repository structure
 
@@ -175,29 +175,40 @@ After the worker reports `completed`, read the persisted deterministic result:
 curl http://localhost:8000/api/v1/analyses/ANALYSIS_ID/result
 ```
 
-The version 1 result contains a repository summary plus bounded language, important-file, technology, entry-point, and warning arrays:
+New analyses produce schema version 2. It retains the version 1 inventory fields and adds bounded source-structure data:
 
 ```json
 {
-  "result_schema_version": 1,
+  "result_schema_version": 2,
   "repository_summary": {"regular_file_count": 12},
   "languages": [{"name": "Python", "file_count": 8}],
   "important_files": [{"kind": "readme", "paths": ["README.md"]}],
   "technologies": [{"name": "FastAPI", "evidence": [{"relative_path": "pyproject.toml"}]}],
   "entry_points": [{"kind": "python_module", "relative_path": "src/main.py"}],
-  "warnings": []
+  "warnings": [],
+  "code_structure": {
+    "summary": {
+      "supported_source_file_count": 8,
+      "parsed_file_count": 8,
+      "total_symbol_count": 24
+    },
+    "files": [{"relative_path": "src/main.py", "parse_status": "parsed"}],
+    "symbols": [{"relative_path": "src/main.py", "kind": "function", "name": "create_app"}],
+    "imports": [{"relative_path": "src/main.py", "module": "fastapi"}],
+    "warnings": []
+  }
 }
 ```
 
-The actual response also includes the analysis identifier, canonical repository identity, and lifecycle timestamps. It never includes source bodies, processing tokens, workspace paths, dependency versions, script commands, Git output, or internal exceptions. Queued and processing analyses return `analysis_not_ready`; failed analyses return `analysis_failed`; a legacy completed record without a result returns `analysis_result_missing`.
+The abbreviated objects above omit other typed counters and metadata. Existing schema version 1 rows remain readable and return `code_structure: null`; version 2 requires a valid `code_structure` object. The actual response also includes the analysis identifier, canonical repository identity, and lifecycle timestamps. It never includes source bodies, snippets, docstrings, literals, default values, processing tokens, workspace paths, dependency versions, script commands, Git output, parser exceptions, or internal exceptions. Queued and processing analyses return `analysis_not_ready`; failed analyses return `analysis_failed`; a legacy completed record without a result returns `analysis_result_missing`.
 
 Only exact `https://github.com/{owner}/{repository}` URLs are accepted, with an optional trailing slash or `.git` suffix. Query strings, fragments, credentials, ports, extra path segments, SSH syntax, IP addresses, localhost, non-HTTPS schemes, and other hosts are rejected. Accepted values are stored as `https://github.com/{owner}/{repository}`.
 
 API errors use `application/problem+json`. A malformed analysis UUID returns `422` with type `invalid_request`; a well-formed UUID with no corresponding record returns `404` with type `analysis_not_found`.
 
-The worker uses only the canonical URL loaded from PostgreSQL. It performs a depth-one, single-branch, tags-free HTTPS clone with prompts, credential helpers, submodule recursion, LFS smudging, repository hooks, unsafe protocols, and HTTP redirects disabled. While the validated repository context is open, deterministic modules inspect bounded metadata and allowlisted text without executing repository code. The complete file inventory and manifest intermediates remain in memory; only the explicit versioned result is stored.
+The worker uses only the canonical URL loaded from PostgreSQL. It performs a depth-one, single-branch, tags-free HTTPS clone with prompts, credential helpers, submodule recursion, LFS smudging, repository hooks, unsafe protocols, and HTTP redirects disabled. While the validated repository context is open, deterministic modules inspect bounded metadata and allowlisted text, then parse supported source as inert data without executing repository code. The complete file inventory and parser intermediates remain in memory; only the explicit versioned result is stored.
 
-The default acquisition limits are 60 seconds, 100 MiB of checked-out regular files, 256 MiB for the complete temporary workspace, 20,000 filesystem entries, 5 MiB per file, a 512-character relative path, and a maximum path depth of 40. Inventory has its own 20-second timeout and bounded entry, directory, path, manifest, text-read, warning, evidence, and entry-point limits. The serialized result is limited to 2 MiB. The Docker worker uses concurrency 2, a 640 MiB repository tmpfs, a 64 MiB runtime tmpfs, 1536 MiB of memory, 2 CPUs, 64 PIDs, 64 MiB of shared memory, and a 90-second stop grace period. Configure the corresponding `REPOLENS_API_*` and `REPOLENS_WORKER_*` variables documented in `.env.example` to change these bounds. Docker Compose cannot restrict egress by DNS name; domain-based GitHub egress enforcement belongs to deployment infrastructure.
+The default acquisition limits are 60 seconds, 100 MiB of checked-out regular files, 256 MiB for the complete temporary workspace, 20,000 filesystem entries, 5 MiB per file, a 512-character relative path, and a maximum path depth of 40. Inventory has its own 20-second timeout and bounded entry, directory, path, manifest, text-read, warning, evidence, and entry-point limits. Source analysis has a 30-second total deadline, parses at most 5,000 supported files and 512 KiB per file, and bounds repository-wide and per-file symbols, imports, imported names, and warnings. The serialized result remains limited to 2 MiB. The Docker worker uses concurrency 2, a 640 MiB repository tmpfs, a 64 MiB runtime tmpfs, 1536 MiB of memory, 2 CPUs, 64 PIDs, 64 MiB of shared memory, and a 90-second stop grace period. Configure the corresponding `REPOLENS_API_*` and `REPOLENS_WORKER_*` variables documented in `.env.example` to change these bounds. Docker Compose cannot restrict egress by DNS name; domain-based GitHub egress enforcement belongs to deployment infrastructure.
 
 Celery acknowledges tasks after successful finalization and re-delivers worker-lost tasks. The Redis visibility timeout defaults to 300 seconds, while PostgreSQL remains the source of truth for analysis state. Claim, external repository work, and finalization use separate short database-session boundaries. Cleanup finishes before the single transaction that persists the result and marks the analysis completed. A normal SIGTERM initiates Celery warm shutdown and gives active work time to clean its workspace.
 
@@ -229,7 +240,7 @@ docker compose config
 2. **Stage 1 — Analysis lifecycle (complete):** canonical public GitHub URLs, analysis records, status API, and queued jobs.
 3. **Stage 2 — Safe acquisition (complete):** bounded shallow clone, temporary workspaces, safe failures, guaranteed cleanup, and hardened worker containment.
 4. **Stage 3A — Inventory and detection (complete):** bounded file inventory, manifest parsing, language and technology detection, entry-point evidence, result persistence, and worker integration.
-5. **Stage 4 — Source parsing:** fault-tolerant Python and TypeScript symbol extraction with Tree-sitter.
+5. **Stage 4 — Source parsing (complete):** bounded Python AST and TypeScript/JavaScript Tree-sitter symbol, import, export, and warning extraction.
 6. **Stage 5 — Rules and scoring:** evidence-backed findings and versioned deterministic scores.
 7. **Stage 6 — Reporting API:** versioned report contracts plus JSON and Markdown exports.
 8. **Stage 7 — Dashboard:** analysis submission, progress, results, findings, and exports.
@@ -239,7 +250,7 @@ See the [development roadmap](docs/development-roadmap.md) for milestone boundar
 
 ## Security principle
 
-**RepoLens must never execute code or scripts from an analyzed repository.** Untrusted repositories are treated as data only: no dependency installation, build command, test command, hook, or application entry point may be run. The worker enforces explicit acquisition and inventory limits, rejects all symbolic links, stores source only temporarily, removes it before result finalization, and runs with a read-only root filesystem and bounded writable tmpfs mounts.
+**RepoLens must never execute code or scripts from an analyzed repository.** Untrusted repositories are treated as data only: no import, dependency installation, build command, test command, hook, or application entry point may be run. The worker enforces explicit acquisition, inventory, and source-parser limits, rejects all symbolic links, stores source only temporarily, removes it before result finalization, and runs with a read-only root filesystem and bounded writable tmpfs mounts.
 
 ## Contributing
 

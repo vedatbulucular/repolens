@@ -14,11 +14,26 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from repolens_api.analysis_results import AnalysisOutput
 from repolens_api.api import get_analysis_dispatcher
+from repolens_api.code_structure.contracts import (
+    CodeStructureResult,
+    CodeStructureSummary,
+    ImportFinding,
+    LanguageFileCount,
+    SourceFileStructure,
+    SourceImportKind,
+    SourceParseStatus,
+    SourceStructureWarning,
+    SourceStructureWarningCode,
+    SourceSymbol,
+    SourceSymbolKind,
+)
 from repolens_api.database import get_session
 from repolens_api.inventory.contracts import (
     DirectoryFileCount,
     EntryPointFinding,
+    FileCategory,
     FindingConfidence,
     ImportantFileGroup,
     InventoryLimits,
@@ -122,6 +137,86 @@ def inventory_result() -> InventoryResult:
                 message="The file content could not be read safely.",
             ),
         ),
+    )
+
+
+@pytest.fixture
+def code_structure_result() -> CodeStructureResult:
+    """Return deterministic source structure without source bodies or literals."""
+    return CodeStructureResult(
+        summary=CodeStructureSummary(
+            supported_source_file_count=1,
+            parsed_file_count=1,
+            skipped_file_count=0,
+            parse_error_file_count=0,
+            total_symbol_count=1,
+            total_function_count=1,
+            total_class_count=0,
+            total_method_count=0,
+            total_import_count=1,
+            language_file_counts=(LanguageFileCount(language="Python", file_count=1),),
+        ),
+        files=(
+            SourceFileStructure(
+                relative_path="src/main.py",
+                language="Python",
+                category=FileCategory.SOURCE,
+                line_count=4,
+                symbol_count=1,
+                import_count=1,
+                class_count=0,
+                function_count=1,
+                method_count=0,
+                parse_status=SourceParseStatus.PARSED,
+                has_syntax_errors=False,
+            ),
+        ),
+        symbols=(
+            SourceSymbol(
+                relative_path="src/main.py",
+                language="Python",
+                kind=SourceSymbolKind.FUNCTION,
+                name="create_app",
+                qualified_name="create_app",
+                start_line=3,
+                end_line=4,
+                parent_name=None,
+                parameter_count=0,
+                is_exported=False,
+                is_public=True,
+            ),
+        ),
+        imports=(
+            ImportFinding(
+                relative_path="src/main.py",
+                language="Python",
+                module="fastapi",
+                imported_names=("FastAPI",),
+                import_kind=SourceImportKind.PYTHON_FROM_IMPORT,
+                is_relative=False,
+                start_line=1,
+            ),
+        ),
+        warnings=(
+            SourceStructureWarning(
+                code=SourceStructureWarningCode.SOURCE_SYNTAX_ERROR,
+                relative_path="src/legacy.py",
+                message="The source file contains syntax errors.",
+            ),
+        ),
+    )
+
+
+@pytest.fixture
+def analysis_output(
+    inventory_result: InventoryResult,
+    code_structure_result: CodeStructureResult,
+) -> AnalysisOutput:
+    """Return the current version 2 persisted worker output."""
+    return AnalysisOutput(
+        schema_version=2,
+        inventory=inventory_result,
+        code_structure=code_structure_result,
     )
 
 

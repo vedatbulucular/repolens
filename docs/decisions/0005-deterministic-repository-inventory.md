@@ -15,7 +15,7 @@ The complete file inventory may contain many paths and intermediate facts. Persi
 
 Repository traversal is bounded by time, entry, directory, path, text-read, and manifest-read limits. Generated and dependency directories such as `.git`, `node_modules`, virtual environments, `vendor`, build output, coverage output, caches, and language-specific target directories are pruned without traversal. Symbolic links and special files remain unsafe.
 
-Inventory and detection never run repository-provided commands, hooks, dependencies, binaries, macros, scripts, builds, or tests. Manifest readers use standard-library JSON, TOML, and XML facilities plus conservative bounded text patterns. Tree-sitter, AST parsing, function extraction, class extraction, scoring, and code-quality analysis remain later work.
+Inventory and detection never run repository-provided commands, hooks, dependencies, binaries, macros, scripts, builds, or tests. Manifest readers use standard-library JSON, TOML, and XML facilities plus conservative bounded text patterns. Source parsing remains a separate downstream module and decision; Stage 4 adds it without changing inventory traversal or manifest policy, as documented in ADR 0006.
 
 Technology findings require explicit evidence. Structured dependency, SDK, reference, or plugin evidence has high confidence; file, directory, or bounded text evidence has medium confidence. Findings and evidence are deduplicated, sorted, and truncated under explicit limits. Entry-point detection uses safe manifest paths, filename conventions, directory presence, and bounded text patterns without interpreting script commands.
 
@@ -23,7 +23,7 @@ The complete file inventory and manifest facts remain in memory and exist only w
 
 ### One versioned result per analysis
 
-Each analysis may own at most one `AnalysisResult`. Its `analysis_id` is both the primary key and an `ON DELETE CASCADE` foreign key to `analyses.id`; no result history or surrogate identifier is added. The first persisted schema version is `1`.
+Each analysis may own at most one `AnalysisResult`. Its `analysis_id` is both the primary key and an `ON DELETE CASCADE` foreign key to `analyses.id`; no result history or surrogate identifier is added. The first persisted schema version is `1`. Stage 4 introduces schema version `2` by extending the payload with required typed `code_structure` data; existing version 1 rows remain readable and the table does not change.
 
 PostgreSQL stores the payload as JSONB. Isolated service and API tests use SQLAlchemy's generic JSON type through a PostgreSQL JSONB type variant. The table stores the schema version and database creation timestamp separately from the derived payload.
 
@@ -31,7 +31,7 @@ PostgreSQL stores the payload as JSONB. Isolated service and API tests use SQLAl
 
 Serialization enumerates every allowed `InventoryResult` field. It does not use a blind recursive dataclass conversion. Enums become string values, tuples become JSON arrays, and only JSON-compatible scalar, list, and string-keyed object values are accepted. Non-finite floats, arbitrary objects, bytes, timestamps, and absolute or traversing paths are rejected.
 
-The persisted payload may contain repository summary metadata, languages, important-file evidence, technology findings, entry-point findings, and safe warnings. It does not contain file bodies, full file inventory entries, dependency versions, script commands, environment values, repository URLs, workspace paths, processing tokens, or analysis timestamps.
+The persisted payload may contain repository summary metadata, languages, important-file evidence, technology findings, entry-point findings, safe warnings, and, in version 2, bounded source symbols, imports, file counters, and structure warnings. It does not contain file bodies, source snippets, docstrings, literal or default values, full file inventory entries, dependency versions, script commands, environment values, repository URLs, workspace paths, processing tokens, parser exceptions, or analysis timestamps.
 
 Canonical byte measurement uses UTF-8 JSON with sorted keys, fixed separators, and `allow_nan=False`. The default maximum is 2 MiB. Serialization failure and size overflow are safe all-or-nothing failures named `result_serialization_failed` and `result_too_large`; no partial or truncated payload is persisted.
 
@@ -52,6 +52,6 @@ The result API accepts only supported schema versions and validates stored paylo
 - Storage remains bounded and excludes source bodies and intermediate full-file inventory data.
 - A one-row model simplifies idempotency but deliberately provides no result history.
 - Schema evolution requires explicit supported-version handling and future migrations.
-- Conservative bounded text signals can produce false positives; deeper AST analysis remains separate.
+- Conservative bounded text signals can produce false positives; source structure is independently derived and does not reinterpret inventory evidence.
 - Stage 3A-2B2 completes worker integration, cleanup coordination, and atomic result-plus-completion finalization.
 - A delivery lost after cleanup but before commit safely repeats deterministic acquisition and inventory; a delivery repeated after commit sees a terminal analysis and performs no work.

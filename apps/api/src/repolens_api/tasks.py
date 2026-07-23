@@ -14,14 +14,19 @@ from repolens_api.acquisition.processes import SubprocessRunner
 from repolens_api.acquisition.service import RepositoryAcquisitionService
 from repolens_api.acquisition.workspace import WorkspaceManager
 from repolens_api.analysis_results import (
+    ANALYSIS_RESULT_SCHEMA_VERSION,
+    AnalysisOutput,
     AnalysisResultPersistenceError,
     AnalysisResultSerializationError,
+    PersistableAnalysisResult,
 )
 from repolens_api.celery_app import celery_app
+from repolens_api.code_structure.errors import SourceStructureError
+from repolens_api.code_structure.service import CodeStructureService
 from repolens_api.database import create_engine, session_factory
-from repolens_api.inventory.contracts import InventoryResult
+from repolens_api.inventory.content import SafeContentReader
 from repolens_api.inventory.errors import InventoryError, RepositoryAnalysisFailed
-from repolens_api.inventory.service import INVENTORY_SCHEMA_VERSION, InventoryService
+from repolens_api.inventory.service import InventoryService
 from repolens_api.repository_urls import InvalidRepositoryUrl, parse_repository_url
 from repolens_api.services import (
     claim_analysis_for_processing,
@@ -30,7 +35,7 @@ from repolens_api.services import (
 )
 from repolens_api.settings import get_settings
 
-AnalysisWork = Callable[[UUID, str], Awaitable[InventoryResult]]
+AnalysisWork = Callable[[UUID, str], Awaitable[PersistableAnalysisResult]]
 SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
 
@@ -46,7 +51,10 @@ class BoundCeleryTask(Protocol):
     request: CeleryTaskRequest
 
 
-async def _analyze_repository(analysis_id: UUID, canonical_url: str) -> InventoryResult:
+async def _analyze_repository(
+    analysis_id: UUID,
+    canonical_url: str,
+) -> PersistableAnalysisResult:
     """Acquire and inventory one repository before its workspace is removed."""
     settings = get_settings()
     acquisition = RepositoryAcquisitionService(
@@ -54,9 +62,24 @@ async def _analyze_repository(analysis_id: UUID, canonical_url: str) -> Inventor
         git=GitRepositoryClient(SubprocessRunner()),
         limits=settings.acquisition_limits(),
     )
-    inventory = InventoryService(settings.inventory_limits())
+    inventory_limits = settings.inventory_limits()
+    content_reader = SafeContentReader(inventory_limits)
+    inventory = InventoryService(inventory_limits, content_reader=content_reader)
+    code_structure = CodeStructureService(
+        settings.source_structure_limits(),
+        content_reader=content_reader,
+    )
     async with acquisition.acquire_workspace(analysis_id, canonical_url) as repository_root:
-        return inventory.analyze(repository_root)
+        inventory_analysis = inventory.analyze_with_files(repository_root)
+        structure_result = code_structure.analyze(
+            repository_root,
+            inventory_analysis.files,
+        )
+        return AnalysisOutput(
+            schema_version=ANALYSIS_RESULT_SCHEMA_VERSION,
+            inventory=inventory_analysis.result,
+            code_structure=structure_result,
+        )
 
 
 async def process_analysis(
@@ -84,7 +107,7 @@ async def process_analysis(
         if identity.canonical_url != claim.repository.canonical_url:
             raise AcquisitionError
         inventory_result = await work(claim.id, claim.repository.canonical_url)
-    except (AcquisitionError, InventoryError) as exc:
+    except (AcquisitionError, InventoryError, SourceStructureError) as exc:
         await _record_failure(
             sessions,
             analysis_id,
@@ -112,7 +135,7 @@ async def process_analysis(
                 analysis_id,
                 processing_token,
                 inventory_result,
-                schema_version=INVENTORY_SCHEMA_VERSION,
+                schema_version=inventory_result.schema_version,
                 max_result_bytes=settings.max_result_bytes,
             )
     except (AnalysisResultSerializationError, AnalysisResultPersistenceError) as exc:

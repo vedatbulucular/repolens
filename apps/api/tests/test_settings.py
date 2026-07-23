@@ -32,6 +32,15 @@ def test_acquisition_settings_accept_consistent_positive_limits(tmp_path: Path) 
         max_technology_findings=4,
         max_technology_evidence_per_finding=2,
         max_entry_points=3,
+        source_parse_timeout_seconds=1,
+        max_source_file_bytes=5,
+        max_structure_files=2,
+        max_source_symbols=4,
+        max_source_imports=4,
+        max_symbols_per_file=2,
+        max_imports_per_file=2,
+        max_imported_names_per_import=2,
+        max_structure_warnings=2,
         max_result_bytes=9,
     )
 
@@ -40,6 +49,7 @@ def test_acquisition_settings_accept_consistent_positive_limits(tmp_path: Path) 
     assert settings.inventory_limits().max_entries == 2
     assert settings.inventory_limits().binary_sample_bytes == 2
     assert settings.inventory_limits().max_manifest_nodes == 10
+    assert settings.source_structure_limits().max_source_file_bytes == 5
     assert settings.max_result_bytes == 9
 
 
@@ -83,6 +93,20 @@ def test_result_byte_limit_default_and_environment_override(
     assert Settings().max_result_bytes == 4096
 
 
+def test_source_structure_settings_load_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REPOLENS_API_SOURCE_PARSE_TIMEOUT_SECONDS", "13")
+    monkeypatch.setenv("REPOLENS_API_MAX_SOURCE_SYMBOLS", "2111")
+    monkeypatch.setenv("REPOLENS_API_MAX_IMPORTED_NAMES_PER_IMPORT", "23")
+
+    limits = Settings().source_structure_limits()
+
+    assert limits.timeout_seconds == 13
+    assert limits.max_source_symbols == 2111
+    assert limits.max_imported_names_per_import == 23
+
+
 def test_inventory_settings_are_documented_and_passed_only_to_worker() -> None:
     repository_root = Path(__file__).resolve().parents[3]
     compose = (repository_root / "compose.yaml").read_text(encoding="utf-8")
@@ -102,6 +126,15 @@ def test_inventory_settings_are_documented_and_passed_only_to_worker() -> None:
         "REPOLENS_API_MAX_TECHNOLOGY_EVIDENCE_PER_FINDING",
         "REPOLENS_API_MAX_ENTRY_POINTS",
         "REPOLENS_API_MAX_RESULT_BYTES",
+        "REPOLENS_API_SOURCE_PARSE_TIMEOUT_SECONDS",
+        "REPOLENS_API_MAX_SOURCE_FILE_BYTES",
+        "REPOLENS_API_MAX_STRUCTURE_FILES",
+        "REPOLENS_API_MAX_SOURCE_SYMBOLS",
+        "REPOLENS_API_MAX_SOURCE_IMPORTS",
+        "REPOLENS_API_MAX_SYMBOLS_PER_FILE",
+        "REPOLENS_API_MAX_IMPORTS_PER_FILE",
+        "REPOLENS_API_MAX_IMPORTED_NAMES_PER_IMPORT",
+        "REPOLENS_API_MAX_STRUCTURE_WARNINGS",
     )
 
     for name in names:
@@ -159,6 +192,24 @@ def test_inventory_settings_are_documented_and_passed_only_to_worker() -> None:
             "inventory limits must be positive",
         ),
         ({"max_entry_points": 0}, "inventory limits must be positive"),
+        ({"source_parse_timeout_seconds": 0}, "source structure limits must be positive"),
+        (
+            {"max_source_file_bytes": 6},
+            "source parse file limit cannot exceed acquisition file limit",
+        ),
+        (
+            {"max_structure_files": 3},
+            "structure file limit cannot exceed inventory entry limit",
+        ),
+        (
+            {"max_symbols_per_file": 5},
+            "per-file symbol limit cannot exceed total symbol limit",
+        ),
+        (
+            {"max_imports_per_file": 5},
+            "per-file import limit cannot exceed total import limit",
+        ),
+        ({"max_structure_warnings": 0}, "source structure limits must be positive"),
         ({"max_result_bytes": 0}, "result byte limit must be positive"),
         ({"max_result_bytes": -1}, "result byte limit must be positive"),
     ],
@@ -191,6 +242,15 @@ def test_acquisition_settings_reject_unsafe_values(
         "max_technology_findings": 4,
         "max_technology_evidence_per_finding": 2,
         "max_entry_points": 3,
+        "source_parse_timeout_seconds": 1,
+        "max_source_file_bytes": 5,
+        "max_structure_files": 2,
+        "max_source_symbols": 4,
+        "max_source_imports": 4,
+        "max_symbols_per_file": 2,
+        "max_imports_per_file": 2,
+        "max_imported_names_per_import": 2,
+        "max_structure_warnings": 2,
         "max_result_bytes": 9,
     }
     values.update(overrides)

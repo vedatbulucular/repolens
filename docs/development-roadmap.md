@@ -102,21 +102,25 @@ Stage 3A-2B2 connects these modules to the production worker. Inventory runs ins
 - Inventory work remains within configured resource limits.
 - Worker redelivery is idempotent, cleanup precedes finalization, and a completed analysis has exactly one result.
 
-## Stage 4 — Python and TypeScript source parsing
+## Stage 4 — Python, TypeScript, and JavaScript source parsing
+
+**Status:** Complete
 
 ### Scope
 
-- Introduce pinned Tree-sitter support for Python and TypeScript.
-- Extract basic classes, functions, methods, imports, and export signals.
-- Add conservative entry-point heuristics.
-- Isolate malformed-file and parser failures.
+- Parse Python with the standard-library AST and TypeScript/JavaScript with pinned, language-specific Tree-sitter grammars.
+- Extract bounded functions, async functions, classes, methods, imports, reliable export signals, file counters, and repository summaries.
+- Preserve inventory categories while excluding ignored, binary, sensitive, oversized, unreadable, and unsupported source.
+- Isolate malformed files and parser failures with fixed warnings; fail safely on global limits, unsafe paths, or the total deadline.
+- Persist new worker results as schema version 2 while continuing to read schema version 1.
 
 ### Acceptance criteria
 
-- Known Python and TypeScript fixtures produce the expected symbols and imports.
-- Entry points always include a reason and evidence path.
-- An invalid or unsupported source file does not fail the complete analysis.
-- Parser time and file-size limits are enforced and tested.
+- Known Python, TypeScript, JavaScript, JSX, and TSX fixtures produce deterministic symbols and imports.
+- An invalid or unsupported source file does not fail the complete analysis when a bounded warning is sufficient.
+- Parser time, file, symbol, import, imported-name, and warning limits are enforced and tested.
+- Source bodies, snippets, literals, parser exceptions, tokens, and workspace paths never enter persisted results.
+- Source analysis runs before workspace cleanup; cleanup still precedes atomic result persistence and completion.
 
 ## Stage 5 — Rule engine and deterministic scoring
 

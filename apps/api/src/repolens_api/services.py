@@ -14,10 +14,10 @@ from repolens_api.analysis_results import (
     AnalysisResultErrorCode,
     AnalysisResultPersistenceError,
     AnalysisResultSerializationError,
+    PersistableAnalysisResult,
     SerializedInventoryResult,
     prepare_inventory_result,
 )
-from repolens_api.inventory.contracts import InventoryResult
 from repolens_api.lifecycle import transition_analysis
 from repolens_api.models import Analysis, AnalysisResult, AnalysisStatus, Repository
 from repolens_api.repository_urls import CanonicalRepository
@@ -84,7 +84,7 @@ async def persist_inventory_result(
     session: AsyncSession,
     analysis_id: UUID,
     processing_token: str,
-    result: InventoryResult,
+    result: PersistableAnalysisResult,
     *,
     schema_version: int,
     max_result_bytes: int,
@@ -111,7 +111,7 @@ async def finalize_analysis_with_result(
     session: AsyncSession,
     analysis_id: UUID,
     processing_token: str,
-    result: InventoryResult,
+    result: PersistableAnalysisResult,
     *,
     schema_version: int,
     max_result_bytes: int,

@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import UTC, datetime
-from typing import NoReturn
+from typing import NoReturn, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -11,7 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from repolens_api import api
-from repolens_api.analysis_results import serialize_inventory_result
+from repolens_api.analysis_results import AnalysisOutput, serialize_inventory_result
 from repolens_api.inventory.contracts import InventoryResult
 from repolens_api.main import app
 from repolens_api.models import Analysis, AnalysisResult, AnalysisStatus, Repository
@@ -169,6 +169,7 @@ def test_completed_analysis_returns_typed_result(
     assert body["technologies"][0]["name"] == "FastAPI"
     assert body["entry_points"][0]["relative_path"] == "src/main.py"
     assert body["warnings"][0]["code"] == "file_unreadable"
+    assert body["code_structure"] is None
     assert body["requested_at"] == "2026-07-23T10:00:00Z"
     assert body["started_at"] == "2026-07-23T10:01:00Z"
     assert body["completed_at"] == "2026-07-23T10:02:00Z"
@@ -192,7 +193,7 @@ def test_unsupported_result_schema_returns_safe_error(
             test_sessions,
             status=AnalysisStatus.COMPLETED,
             payload=serialize_inventory_result(inventory_result),
-            schema_version=2,
+            schema_version=99,
         )
     )
 
@@ -200,6 +201,79 @@ def test_unsupported_result_schema_returns_safe_error(
 
     assert response.status_code == 500
     assert response.json()["type"] == "unsupported_result_schema"
+
+
+def test_completed_analysis_returns_typed_version_two_structure(
+    api_client: TestClient,
+    test_sessions: async_sessionmaker[AsyncSession],
+    analysis_output: AnalysisOutput,
+) -> None:
+    analysis_id = asyncio.run(
+        _create_analysis(
+            test_sessions,
+            status=AnalysisStatus.COMPLETED,
+            payload=serialize_inventory_result(analysis_output),
+            schema_version=2,
+        )
+    )
+
+    response = api_client.get(f"/api/v1/analyses/{analysis_id}/result")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result_schema_version"] == 2
+    assert body["code_structure"]["summary"]["total_symbol_count"] == 1
+    assert body["code_structure"]["files"][0]["relative_path"] == "src/main.py"
+    assert body["code_structure"]["symbols"][0]["name"] == "create_app"
+    assert body["code_structure"]["imports"][0]["module"] == "fastapi"
+    assert body["code_structure"]["warnings"][0]["code"] == "source_syntax_error"
+    assert "PRIVATE_SOURCE_BODY" not in response.text
+    assert "/tmp/repolens-workspaces" not in response.text
+
+
+def test_version_two_payload_requires_code_structure(
+    api_client: TestClient,
+    test_sessions: async_sessionmaker[AsyncSession],
+    inventory_result: InventoryResult,
+) -> None:
+    analysis_id = asyncio.run(
+        _create_analysis(
+            test_sessions,
+            status=AnalysisStatus.COMPLETED,
+            payload=serialize_inventory_result(inventory_result),
+            schema_version=2,
+        )
+    )
+
+    response = api_client.get(f"/api/v1/analyses/{analysis_id}/result")
+
+    assert response.status_code == 500
+    assert response.json()["type"] == "analysis_result_invalid"
+
+
+def test_version_two_payload_rejects_parser_diagnostic_message(
+    api_client: TestClient,
+    test_sessions: async_sessionmaker[AsyncSession],
+    analysis_output: AnalysisOutput,
+) -> None:
+    payload = serialize_inventory_result(analysis_output)
+    structure = cast(dict[str, object], payload["code_structure"])
+    warnings = cast(list[dict[str, object]], structure["warnings"])
+    warnings[0]["message"] = "PRIVATE parser exception and source line"
+    analysis_id = asyncio.run(
+        _create_analysis(
+            test_sessions,
+            status=AnalysisStatus.COMPLETED,
+            payload=payload,
+            schema_version=2,
+        )
+    )
+
+    response = api_client.get(f"/api/v1/analyses/{analysis_id}/result")
+
+    assert response.status_code == 500
+    assert response.json()["type"] == "analysis_result_invalid"
+    assert "PRIVATE" not in response.text
 
 
 @pytest.mark.parametrize(
@@ -276,6 +350,7 @@ def test_openapi_documents_typed_result_and_problem_responses() -> None:
         "technologies",
         "entry_points",
         "warnings",
+        "code_structure",
         "requested_at",
         "started_at",
         "completed_at",
