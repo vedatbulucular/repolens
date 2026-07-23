@@ -27,12 +27,18 @@ def test_acquisition_settings_accept_consistent_positive_limits(tmp_path: Path) 
         max_text_read_bytes=3,
         binary_sample_bytes=2,
         max_analysis_warnings=1,
+        max_json_nesting_depth=3,
+        max_manifest_nodes=10,
+        max_technology_findings=4,
+        max_technology_evidence_per_finding=2,
+        max_entry_points=3,
     )
 
     assert settings.acquisition_limits().max_workspace_bytes == 20
     assert settings.broker_visibility_timeout_seconds == 30
     assert settings.inventory_limits().max_entries == 2
     assert settings.inventory_limits().binary_sample_bytes == 2
+    assert settings.inventory_limits().max_manifest_nodes == 10
 
 
 def test_broker_visibility_timeout_loads_from_environment(
@@ -56,11 +62,13 @@ def test_compose_worker_concurrency_uses_one_documented_setting() -> None:
 def test_inventory_settings_load_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("REPOLENS_API_INVENTORY_TIMEOUT_SECONDS", "11")
     monkeypatch.setenv("REPOLENS_API_MAX_ANALYSIS_WARNINGS", "17")
+    monkeypatch.setenv("REPOLENS_API_MAX_ENTRY_POINTS", "19")
 
     limits = Settings().inventory_limits()
 
     assert limits.timeout_seconds == 11
     assert limits.max_warnings == 17
+    assert limits.max_entry_points == 19
 
 
 def test_inventory_settings_are_documented_and_passed_only_to_worker() -> None:
@@ -76,6 +84,11 @@ def test_inventory_settings_are_documented_and_passed_only_to_worker() -> None:
         "REPOLENS_API_MAX_TEXT_READ_BYTES",
         "REPOLENS_API_BINARY_SAMPLE_BYTES",
         "REPOLENS_API_MAX_ANALYSIS_WARNINGS",
+        "REPOLENS_API_MAX_JSON_NESTING_DEPTH",
+        "REPOLENS_API_MAX_MANIFEST_NODES",
+        "REPOLENS_API_MAX_TECHNOLOGY_FINDINGS",
+        "REPOLENS_API_MAX_TECHNOLOGY_EVIDENCE_PER_FINDING",
+        "REPOLENS_API_MAX_ENTRY_POINTS",
     )
 
     for name in names:
@@ -125,6 +138,14 @@ def test_inventory_settings_are_documented_and_passed_only_to_worker() -> None:
             {"binary_sample_bytes": 4},
             "binary sample limit cannot exceed text read limit",
         ),
+        ({"max_json_nesting_depth": 0}, "inventory limits must be positive"),
+        ({"max_manifest_nodes": 0}, "inventory limits must be positive"),
+        ({"max_technology_findings": 0}, "inventory limits must be positive"),
+        (
+            {"max_technology_evidence_per_finding": 0},
+            "inventory limits must be positive",
+        ),
+        ({"max_entry_points": 0}, "inventory limits must be positive"),
     ],
 )
 def test_acquisition_settings_reject_unsafe_values(
@@ -150,6 +171,11 @@ def test_acquisition_settings_reject_unsafe_values(
         "max_text_read_bytes": 3,
         "binary_sample_bytes": 2,
         "max_analysis_warnings": 1,
+        "max_json_nesting_depth": 3,
+        "max_manifest_nodes": 10,
+        "max_technology_findings": 4,
+        "max_technology_evidence_per_finding": 2,
+        "max_entry_points": 3,
     }
     values.update(overrides)
 

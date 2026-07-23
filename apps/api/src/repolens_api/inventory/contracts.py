@@ -37,7 +37,22 @@ class InventoryWarningCode(StrEnum):
     FILE_UNREADABLE = "file_unreadable"
     UNSUPPORTED_FILE_ENCODING = "unsupported_file_encoding"
     CONTENT_TOO_LARGE = "content_too_large"
+    MANIFEST_PARSE_FAILED = "manifest_parse_failed"
+    MANIFEST_TOO_LARGE = "manifest_too_large"
+    MANIFEST_NESTING_LIMIT_EXCEEDED = "manifest_nesting_limit_exceeded"
+    MANIFEST_NODE_LIMIT_EXCEEDED = "manifest_node_limit_exceeded"
+    UNSAFE_MANIFEST_VALUE = "unsafe_manifest_value"
+    MANIFEST_ENTRY_SKIPPED = "manifest_entry_skipped"
+    TECHNOLOGY_FINDING_LIMIT_REACHED = "technology_finding_limit_reached"
+    ENTRY_POINT_LIMIT_REACHED = "entry_point_limit_reached"
     WARNING_LIMIT_REACHED = "warning_limit_reached"
+
+
+class FindingConfidence(StrEnum):
+    """Supported confidence levels for deterministic findings."""
+
+    HIGH = "high"
+    MEDIUM = "medium"
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +67,11 @@ class InventoryLimits:
     max_text_read_bytes: int
     binary_sample_bytes: int
     max_warnings: int
+    max_json_nesting_depth: int
+    max_manifest_nodes: int
+    max_technology_findings: int
+    max_technology_evidence_per_finding: int
+    max_entry_points: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +134,54 @@ class ImportantFileGroup:
 
 
 @dataclass(frozen=True, slots=True)
+class ManifestRelativePath:
+    """One allowlisted relative path extracted from a manifest."""
+
+    kind: str
+    relative_path: str
+
+
+@dataclass(frozen=True, slots=True)
+class ManifestFact:
+    """Normalized, allowlisted manifest facts without untrusted values."""
+
+    kind: str
+    relative_path: str
+    names: tuple[str, ...]
+    metadata_flags: tuple[str, ...]
+    relative_paths: tuple[ManifestRelativePath, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TechnologyEvidence:
+    """One safe reason for reporting a technology."""
+
+    evidence_type: str
+    relative_path: str
+
+
+@dataclass(frozen=True, slots=True)
+class TechnologyFinding:
+    """One deduplicated technology supported by bounded evidence."""
+
+    name: str
+    category: str
+    confidence: FindingConfidence
+    evidence: tuple[TechnologyEvidence, ...]
+    evidence_truncated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class EntryPointFinding:
+    """One conservative entry-point signal without source content."""
+
+    kind: str
+    relative_path: str
+    confidence: FindingConfidence
+    evidence_type: str
+
+
+@dataclass(frozen=True, slots=True)
 class InventoryWarning:
     """A fixed, safe warning without source or operating-system detail."""
 
@@ -124,10 +192,12 @@ class InventoryWarning:
 
 @dataclass(frozen=True, slots=True)
 class InventoryResult:
-    """Stage 3A-1 inventory output without persistence or later-stage facts."""
+    """Deterministic inventory output without persistence or source content."""
 
     schema_version: int
     repository_summary: RepositorySummary
     languages: tuple[LanguageStatistic, ...]
     important_files: tuple[ImportantFileGroup, ...]
+    technologies: tuple[TechnologyFinding, ...]
+    entry_points: tuple[EntryPointFinding, ...]
     warnings: tuple[InventoryWarning, ...]

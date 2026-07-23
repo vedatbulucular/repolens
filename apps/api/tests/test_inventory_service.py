@@ -1,5 +1,6 @@
-"""Integration tests for Stage 3A-1 inventory orchestration."""
+"""Integration tests for deterministic inventory orchestration."""
 
+import json
 from dataclasses import fields, replace
 from pathlib import Path
 
@@ -87,6 +88,27 @@ class UnreadableContentReader(SafeContentReader):
         )
 
 
+class FailOnSensitiveTextReader(SafeContentReader):
+    """Prove that sensitive inventory entries are never opened as text."""
+
+    def read_text(
+        self,
+        repository_root: Path,
+        relative_path: str,
+        *,
+        expected_size: int,
+        max_bytes: int | None = None,
+    ) -> TextReadResult:
+        if relative_path == ".env":
+            raise AssertionError("sensitive content must not be opened")
+        return super().read_text(
+            repository_root,
+            relative_path,
+            expected_size=expected_size,
+            max_bytes=max_bytes,
+        )
+
+
 def test_same_fixture_produces_equal_logical_result(
     tmp_path: Path,
     inventory_limits: InventoryLimits,
@@ -154,8 +176,59 @@ def test_result_contains_no_absolute_path_content_or_future_stage_fields(
         "repository_summary",
         "languages",
         "important_files",
+        "technologies",
+        "entry_points",
         "warnings",
     }
+
+
+def test_broken_manifest_does_not_stop_other_technology_findings(
+    tmp_path: Path,
+    inventory_limits: InventoryLimits,
+) -> None:
+    (tmp_path / "package.json").write_text("{", encoding="utf-8")
+    (tmp_path / "Dockerfile").write_text("private source", encoding="utf-8")
+
+    result = InventoryService(inventory_limits).analyze(tmp_path)
+
+    assert tuple(finding.name for finding in result.technologies) == ("Docker",)
+    assert any(
+        warning.code is InventoryWarningCode.MANIFEST_PARSE_FAILED for warning in result.warnings
+    )
+
+
+def test_manifest_warnings_are_deduplicated_and_sorted(
+    tmp_path: Path,
+    inventory_limits: InventoryLimits,
+) -> None:
+    (tmp_path / "requirements.txt").write_text(
+        "-r one.txt\n-r two.txt\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "package.json").write_text(
+        json.dumps({"main": "../outside.js"}),
+        encoding="utf-8",
+    )
+
+    result = InventoryService(inventory_limits).analyze(tmp_path)
+
+    assert tuple((warning.code, warning.relative_path) for warning in result.warnings) == (
+        (InventoryWarningCode.MANIFEST_ENTRY_SKIPPED, "requirements.txt"),
+        (InventoryWarningCode.UNSAFE_MANIFEST_VALUE, "package.json"),
+    )
+
+
+def test_sensitive_file_is_never_opened_during_detection(
+    tmp_path: Path,
+    inventory_limits: InventoryLimits,
+) -> None:
+    (tmp_path / ".env").write_text("PRIVATE_TOKEN=secret", encoding="utf-8")
+    reader = FailOnSensitiveTextReader(inventory_limits)
+
+    result = InventoryService(inventory_limits, content_reader=reader).analyze(tmp_path)
+
+    assert result.repository_summary.sensitive_file_count == 1
+    assert "PRIVATE_TOKEN" not in repr(result)
 
 
 def test_summary_counts_ignored_binary_sensitive_unreadable_and_skipped_files(

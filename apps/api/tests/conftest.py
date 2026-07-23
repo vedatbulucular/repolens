@@ -38,6 +38,11 @@ def inventory_limits() -> InventoryLimits:
         max_text_read_bytes=512,
         binary_sample_bytes=64,
         max_warnings=20,
+        max_json_nesting_depth=8,
+        max_manifest_nodes=100,
+        max_technology_findings=20,
+        max_technology_evidence_per_finding=5,
+        max_entry_points=20,
     )
 
 

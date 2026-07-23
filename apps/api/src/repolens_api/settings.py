@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     max_text_read_bytes: int = 262_144
     binary_sample_bytes: int = 8_192
     max_analysis_warnings: int = 200
+    max_json_nesting_depth: int = 32
+    max_manifest_nodes: int = 50_000
+    max_technology_findings: int = 100
+    max_technology_evidence_per_finding: int = 20
+    max_entry_points: int = 100
 
     @model_validator(mode="after")
     def validate_acquisition_settings(self) -> "Settings":
@@ -73,6 +78,11 @@ class Settings(BaseSettings):
             self.max_text_read_bytes,
             self.binary_sample_bytes,
             self.max_analysis_warnings,
+            self.max_json_nesting_depth,
+            self.max_manifest_nodes,
+            self.max_technology_findings,
+            self.max_technology_evidence_per_finding,
+            self.max_entry_points,
         )
         if any(limit <= 0 for limit in inventory_limits):
             raise ValueError("inventory limits must be positive")
@@ -113,6 +123,11 @@ class Settings(BaseSettings):
             max_text_read_bytes=self.max_text_read_bytes,
             binary_sample_bytes=self.binary_sample_bytes,
             max_warnings=self.max_analysis_warnings,
+            max_json_nesting_depth=self.max_json_nesting_depth,
+            max_manifest_nodes=self.max_manifest_nodes,
+            max_technology_findings=self.max_technology_findings,
+            max_technology_evidence_per_finding=self.max_technology_evidence_per_finding,
+            max_entry_points=self.max_entry_points,
         )
 
 

@@ -80,7 +80,7 @@ Stage 2A uses a depth-one, single-branch Git clone and rejects all symbolic link
 
 ## Stage 3 — File inventory and technology detection
 
-**Status:** Stage 3A-1 in development on `feature/deterministic-repository-inventory`; the complete Stage 3 milestone is not yet implemented
+**Status:** Stage 3A-1 is complete on `main`; Stage 3A-2A is in development on `feature/repository-technology-detection`; the complete Stage 3A milestone is not yet implemented
 
 ### Scope
 
@@ -88,6 +88,8 @@ Stage 2A uses a depth-one, single-branch Git clone and rejects all symbolic link
 - Detect languages from supported extensions and byte counts.
 - Identify configuration, documentation, environment-example, CI, and test signals.
 - Apply explicit directory, generated-content, binary, and oversized-file exclusions.
+- Parse allowlisted manifest facts without retaining versions, commands, URLs, or source content.
+- Detect bounded technology evidence and conservative entry points without ASTs.
 
 ### Acceptance criteria
 
