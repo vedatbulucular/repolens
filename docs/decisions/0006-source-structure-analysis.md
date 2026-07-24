@@ -43,6 +43,8 @@ The worker performs acquisition, inventory, manifest and evidence detection, and
 
 New worker results use schema version `2` and require a typed `code_structure` object. Schema version `1` remains supported for existing persisted inventory results and returns `code_structure: null` through the API. Unknown versions and malformed version 2 payloads fail with fixed safe API errors. No database migration is required because `analysis_results` already stores a separate positive schema version and a JSONB payload.
 
+Stage 5 subsequently introduced schema version `3`, as recorded in ADR 0007. Version 3 retains the complete typed version 2 `code_structure` object and adds required `quality_findings`. Versions 1 and 2 remain readable; this later result-contract extension does not change the source-parsing decision or require a database migration.
+
 The explicit serializer enumerates every permitted source-structure field, rejects unsafe paths and unsupported values, produces canonical JSON, and retains the existing all-or-nothing result-byte limit. Result insertion and the completed transition remain one processing-token-owned transaction, so redelivery cannot create a duplicate result.
 
 ## Consequences

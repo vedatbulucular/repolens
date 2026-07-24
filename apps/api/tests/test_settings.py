@@ -41,6 +41,11 @@ def test_acquisition_settings_accept_consistent_positive_limits(tmp_path: Path) 
         max_imports_per_file=2,
         max_imported_names_per_import=2,
         max_structure_warnings=2,
+        quality_analysis_timeout_seconds=1,
+        max_quality_findings=4,
+        max_quality_related_paths=2,
+        max_quality_evidence_items=2,
+        max_document_read_bytes=4,
         max_result_bytes=9,
     )
 
@@ -50,6 +55,7 @@ def test_acquisition_settings_accept_consistent_positive_limits(tmp_path: Path) 
     assert settings.inventory_limits().binary_sample_bytes == 2
     assert settings.inventory_limits().max_manifest_nodes == 10
     assert settings.source_structure_limits().max_source_file_bytes == 5
+    assert settings.quality_limits().max_document_read_bytes == 4
     assert settings.max_result_bytes == 9
 
 
@@ -107,6 +113,24 @@ def test_source_structure_settings_load_from_environment(
     assert limits.max_imported_names_per_import == 23
 
 
+def test_quality_settings_load_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REPOLENS_API_QUALITY_ANALYSIS_TIMEOUT_SECONDS", "7")
+    monkeypatch.setenv("REPOLENS_API_MAX_QUALITY_FINDINGS", "31")
+    monkeypatch.setenv("REPOLENS_API_MAX_QUALITY_RELATED_PATHS", "11")
+    monkeypatch.setenv("REPOLENS_API_MAX_QUALITY_EVIDENCE_ITEMS", "13")
+    monkeypatch.setenv("REPOLENS_API_MAX_DOCUMENT_READ_BYTES", "4096")
+
+    limits = Settings().quality_limits()
+
+    assert limits.timeout_seconds == 7
+    assert limits.max_findings == 31
+    assert limits.max_related_paths == 11
+    assert limits.max_evidence_items == 13
+    assert limits.max_document_read_bytes == 4_096
+
+
 def test_inventory_settings_are_documented_and_passed_only_to_worker() -> None:
     repository_root = Path(__file__).resolve().parents[3]
     compose = (repository_root / "compose.yaml").read_text(encoding="utf-8")
@@ -135,6 +159,11 @@ def test_inventory_settings_are_documented_and_passed_only_to_worker() -> None:
         "REPOLENS_API_MAX_IMPORTS_PER_FILE",
         "REPOLENS_API_MAX_IMPORTED_NAMES_PER_IMPORT",
         "REPOLENS_API_MAX_STRUCTURE_WARNINGS",
+        "REPOLENS_API_QUALITY_ANALYSIS_TIMEOUT_SECONDS",
+        "REPOLENS_API_MAX_QUALITY_FINDINGS",
+        "REPOLENS_API_MAX_QUALITY_RELATED_PATHS",
+        "REPOLENS_API_MAX_QUALITY_EVIDENCE_ITEMS",
+        "REPOLENS_API_MAX_DOCUMENT_READ_BYTES",
     )
 
     for name in names:
@@ -210,6 +239,11 @@ def test_inventory_settings_are_documented_and_passed_only_to_worker() -> None:
             "per-file import limit cannot exceed total import limit",
         ),
         ({"max_structure_warnings": 0}, "source structure limits must be positive"),
+        ({"quality_analysis_timeout_seconds": 0}, "quality analysis limits must be positive"),
+        (
+            {"max_document_read_bytes": 6},
+            "quality document read limit cannot exceed acquisition file limit",
+        ),
         ({"max_result_bytes": 0}, "result byte limit must be positive"),
         ({"max_result_bytes": -1}, "result byte limit must be positive"),
     ],
@@ -251,6 +285,11 @@ def test_acquisition_settings_reject_unsafe_values(
         "max_imports_per_file": 2,
         "max_imported_names_per_import": 2,
         "max_structure_warnings": 2,
+        "quality_analysis_timeout_seconds": 1,
+        "max_quality_findings": 4,
+        "max_quality_related_paths": 2,
+        "max_quality_evidence_items": 2,
+        "max_document_read_bytes": 4,
         "max_result_bytes": 9,
     }
     values.update(overrides)

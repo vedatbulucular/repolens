@@ -10,11 +10,13 @@ from repolens_api.analysis_results import (
     AnalysisOutput,
     AnalysisResultErrorCode,
     AnalysisResultSerializationError,
+    QualityAnalysisOutput,
     deterministic_json_bytes,
     prepare_inventory_result,
     serialize_inventory_result,
 )
 from repolens_api.inventory.contracts import InventoryResult
+from repolens_api.quality_findings.contracts import QualityFindingCode
 
 
 def test_serializer_emits_only_explicit_json_compatible_fields(
@@ -76,6 +78,30 @@ def test_version_two_serializer_adds_only_typed_code_structure(
     assert imports[0]["imported_names"] == ["FastAPI"]
 
 
+def test_version_three_serializer_adds_typed_quality_findings(
+    quality_analysis_output: QualityAnalysisOutput,
+) -> None:
+    payload = serialize_inventory_result(quality_analysis_output)
+
+    assert set(payload) == {
+        "repository_summary",
+        "languages",
+        "important_files",
+        "technologies",
+        "entry_points",
+        "warnings",
+        "code_structure",
+        "quality_findings",
+    }
+    quality = cast(dict[str, object], payload["quality_findings"])
+    findings = cast(list[dict[str, object]], quality["findings"])
+    evidence = cast(list[dict[str, object]], findings[0]["evidence"])
+    assert findings[0]["code"] == QualityFindingCode.DOCUMENTATION_PRESENT.value
+    assert findings[0]["related_paths"] == ["README.md"]
+    assert evidence == [{"kind": "file_count", "value": 1}]
+    assert quality["warnings"] == []
+
+
 def test_deterministic_json_bytes_are_equal_for_the_same_logical_result(
     inventory_result: InventoryResult,
 ) -> None:
@@ -94,6 +120,16 @@ def test_version_two_serialization_is_deterministic(
     second = prepare_inventory_result(analysis_output, max_result_bytes=20_000)
 
     assert first.schema_version == 2
+    assert first.json_bytes == second.json_bytes
+
+
+def test_version_three_serialization_is_deterministic(
+    quality_analysis_output: QualityAnalysisOutput,
+) -> None:
+    first = prepare_inventory_result(quality_analysis_output, max_result_bytes=30_000)
+    second = prepare_inventory_result(quality_analysis_output, max_result_bytes=30_000)
+
+    assert first.schema_version == 3
     assert first.json_bytes == second.json_bytes
 
 
@@ -225,6 +261,57 @@ def test_version_two_serializer_rejects_non_contract_warning_message(
 
     with pytest.raises(AnalysisResultSerializationError):
         serialize_inventory_result(unsafe_output)
+
+
+def test_version_three_serializer_rejects_non_contract_finding_text(
+    quality_analysis_output: QualityAnalysisOutput,
+) -> None:
+    result = quality_analysis_output.quality_findings
+    unsafe_finding = replace(result.findings[0], message="PRIVATE document content")
+    unsafe_output = replace(
+        quality_analysis_output,
+        quality_findings=replace(result, findings=(unsafe_finding,)),
+    )
+
+    with pytest.raises(AnalysisResultSerializationError):
+        serialize_inventory_result(unsafe_output)
+
+
+@pytest.mark.parametrize(
+    "unsafe_path",
+    ["/tmp/private.md", r"C:\private.md", "../outside.md"],
+)
+def test_version_three_serializer_rejects_unsafe_quality_paths(
+    quality_analysis_output: QualityAnalysisOutput,
+    unsafe_path: str,
+) -> None:
+    result = quality_analysis_output.quality_findings
+    finding = replace(result.findings[0], related_paths=(unsafe_path,))
+    unsafe_output = replace(
+        quality_analysis_output,
+        quality_findings=replace(result, findings=(finding,)),
+    )
+
+    with pytest.raises(AnalysisResultSerializationError):
+        serialize_inventory_result(unsafe_output)
+
+
+def test_version_three_output_contains_no_document_content_or_tokens(
+    quality_analysis_output: QualityAnalysisOutput,
+) -> None:
+    serialized = prepare_inventory_result(
+        quality_analysis_output,
+        max_result_bytes=30_000,
+    ).json_bytes.decode("utf-8")
+
+    for forbidden in (
+        "PRIVATE README PARAGRAPH",
+        "run-private-command --token secret",
+        "processing-token-private",
+        "/tmp/repolens-workspaces",
+        r"C:\private",
+    ):
+        assert forbidden not in serialized
 
 
 def test_result_size_limit_is_all_or_nothing(

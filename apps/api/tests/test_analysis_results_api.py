@@ -11,7 +11,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from repolens_api import api
-from repolens_api.analysis_results import AnalysisOutput, serialize_inventory_result
+from repolens_api.analysis_results import (
+    AnalysisOutput,
+    QualityAnalysisOutput,
+    serialize_inventory_result,
+)
 from repolens_api.inventory.contracts import InventoryResult
 from repolens_api.main import app
 from repolens_api.models import Analysis, AnalysisResult, AnalysisStatus, Repository
@@ -170,6 +174,7 @@ def test_completed_analysis_returns_typed_result(
     assert body["entry_points"][0]["relative_path"] == "src/main.py"
     assert body["warnings"][0]["code"] == "file_unreadable"
     assert body["code_structure"] is None
+    assert body["quality_findings"] is None
     assert body["requested_at"] == "2026-07-23T10:00:00Z"
     assert body["started_at"] == "2026-07-23T10:01:00Z"
     assert body["completed_at"] == "2026-07-23T10:02:00Z"
@@ -227,6 +232,7 @@ def test_completed_analysis_returns_typed_version_two_structure(
     assert body["code_structure"]["symbols"][0]["name"] == "create_app"
     assert body["code_structure"]["imports"][0]["module"] == "fastapi"
     assert body["code_structure"]["warnings"][0]["code"] == "source_syntax_error"
+    assert body["quality_findings"] is None
     assert "PRIVATE_SOURCE_BODY" not in response.text
     assert "/tmp/repolens-workspaces" not in response.text
 
@@ -242,6 +248,103 @@ def test_version_two_payload_requires_code_structure(
             status=AnalysisStatus.COMPLETED,
             payload=serialize_inventory_result(inventory_result),
             schema_version=2,
+        )
+    )
+
+    response = api_client.get(f"/api/v1/analyses/{analysis_id}/result")
+
+    assert response.status_code == 500
+    assert response.json()["type"] == "analysis_result_invalid"
+
+
+def test_completed_analysis_returns_typed_version_three_quality_findings(
+    api_client: TestClient,
+    test_sessions: async_sessionmaker[AsyncSession],
+    quality_analysis_output: QualityAnalysisOutput,
+) -> None:
+    analysis_id = asyncio.run(
+        _create_analysis(
+            test_sessions,
+            status=AnalysisStatus.COMPLETED,
+            payload=serialize_inventory_result(quality_analysis_output),
+            schema_version=3,
+        )
+    )
+
+    response = api_client.get(f"/api/v1/analyses/{analysis_id}/result")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result_schema_version"] == 3
+    assert body["code_structure"]["summary"]["total_symbol_count"] == 1
+    quality = body["quality_findings"]
+    assert quality["summary"]["total_finding_count"] == 1
+    assert quality["findings"][0]["code"] == "documentation_present"
+    assert quality["findings"][0]["related_paths"] == ["README.md"]
+    assert "PRIVATE_SOURCE_BODY" not in response.text
+    assert "processing-token" not in response.text
+
+
+def test_version_three_payload_requires_quality_findings(
+    api_client: TestClient,
+    test_sessions: async_sessionmaker[AsyncSession],
+    analysis_output: AnalysisOutput,
+) -> None:
+    analysis_id = asyncio.run(
+        _create_analysis(
+            test_sessions,
+            status=AnalysisStatus.COMPLETED,
+            payload=serialize_inventory_result(analysis_output),
+            schema_version=3,
+        )
+    )
+
+    response = api_client.get(f"/api/v1/analyses/{analysis_id}/result")
+
+    assert response.status_code == 500
+    assert response.json()["type"] == "analysis_result_invalid"
+
+
+def test_version_three_payload_rejects_non_contract_quality_text(
+    api_client: TestClient,
+    test_sessions: async_sessionmaker[AsyncSession],
+    quality_analysis_output: QualityAnalysisOutput,
+) -> None:
+    payload = serialize_inventory_result(quality_analysis_output)
+    quality = cast(dict[str, object], payload["quality_findings"])
+    findings = cast(list[dict[str, object]], quality["findings"])
+    findings[0]["message"] = "PRIVATE README paragraph"
+    analysis_id = asyncio.run(
+        _create_analysis(
+            test_sessions,
+            status=AnalysisStatus.COMPLETED,
+            payload=payload,
+            schema_version=3,
+        )
+    )
+
+    response = api_client.get(f"/api/v1/analyses/{analysis_id}/result")
+
+    assert response.status_code == 500
+    assert response.json()["type"] == "analysis_result_invalid"
+    assert "PRIVATE" not in response.text
+
+
+def test_version_three_payload_rejects_inconsistent_quality_summary(
+    api_client: TestClient,
+    test_sessions: async_sessionmaker[AsyncSession],
+    quality_analysis_output: QualityAnalysisOutput,
+) -> None:
+    payload = serialize_inventory_result(quality_analysis_output)
+    quality = cast(dict[str, object], payload["quality_findings"])
+    summary = cast(dict[str, object], quality["summary"])
+    summary["positive_signal_count"] = 99
+    analysis_id = asyncio.run(
+        _create_analysis(
+            test_sessions,
+            status=AnalysisStatus.COMPLETED,
+            payload=payload,
+            schema_version=3,
         )
     )
 
@@ -351,6 +454,7 @@ def test_openapi_documents_typed_result_and_problem_responses() -> None:
         "entry_points",
         "warnings",
         "code_structure",
+        "quality_findings",
         "requested_at",
         "started_at",
         "completed_at",

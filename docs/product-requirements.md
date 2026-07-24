@@ -8,9 +8,9 @@ RepoLens is not a wrapper that sends an entire codebase to an AI model. Determin
 
 ## Current delivery scope
 
-The current Stage 4 delivery accepts and canonicalizes supported public GitHub repository URLs, persists repository identity and job state, and lets the worker shallow-clone only the stored canonical URL under strict process, filesystem, and container controls. While the temporary workspace exists, deterministic inventory produces bounded repository summary, language, important-file, technology, entry-point, and warning data. Bounded parsers then derive Python, TypeScript, and JavaScript declarations, imports, reliable export signals, file counters, and safe parse warnings.
+The current Stage 5 delivery accepts and canonicalizes supported public GitHub repository URLs, persists repository identity and job state, and lets the worker shallow-clone only the stored canonical URL under strict process, filesystem, and container controls. While the temporary workspace exists, deterministic inventory produces bounded repository summary, language, important-file, technology, entry-point, and warning data. Bounded parsers then derive Python, TypeScript, and JavaScript declarations, imports, reliable export signals, file counters, and safe parse warnings. Fixed rules use those facts plus bounded README and CI signals to produce documentation, testing, governance, automation, maintainability, and onboarding findings.
 
-The worker contacts GitHub only through a hardened HTTPS Git clone. It is non-root, has a read-only root filesystem, no Linux capabilities, no-new-privileges, bounded writable tmpfs mounts, explicit resource limits, and separated data and egress networks. It never imports or executes repository content and never persists source text. Cleanup completes before the schema version 2 result and completed lifecycle transition are committed atomically. Schema version 1 results remain readable. Scoring, frontend integration, and AI remain unimplemented.
+The worker contacts GitHub only through a hardened HTTPS Git clone. It is non-root, has a read-only root filesystem, no Linux capabilities, no-new-privileges, bounded writable tmpfs mounts, explicit resource limits, and separated data and egress networks. It never imports or executes repository content and never persists source, README, or CI text. Cleanup completes before the schema version 3 result and completed lifecycle transition are committed atomically. Schema versions 1 and 2 remain readable. Category scores, an overall health score, report exports, frontend integration, and AI remain unimplemented.
 
 ## Target users
 
@@ -46,8 +46,8 @@ The worker contacts GitHub only through a hardened HTTPS Git clone. It is non-ro
 - **FR-07:** Inspect README, LICENSE, CONTRIBUTING, test files or configuration, and `.env.example`-style documentation signals.
 - **FR-08:** Extract bounded classes, functions, methods, imports, and reliable export signals from supported Python, TypeScript, and JavaScript files without executing them.
 - **FR-09:** Derive basic module-dependency and code-organization metadata within the explicitly supported languages.
-- **FR-10:** Generate deterministic documentation, project-readiness, code-organization, and maintainability findings.
-- **FR-11:** Attach a stable rule ID, category, severity, description, machine-readable evidence, bounded score impact, and recommendation to every finding.
+- **FR-10:** Generate deterministic documentation, testing, governance, automation, onboarding, and maintainability findings.
+- **FR-11:** Attach a stable rule ID, category, severity, fixed description, bounded machine-readable evidence, safe related paths, and recommendation to every finding. Score impact is added only when scoring is implemented.
 
 ### Scoring and report delivery
 
@@ -80,6 +80,7 @@ The health score is an onboarding and readiness indicator, not an absolute judgm
 - Never execute repository code, scripts, dependencies, hooks, tests, builds, macros, or binaries.
 - Restrict acquisition to the documented public GitHub URL policy and defend against SSRF and unsafe redirects.
 - Enforce repository-size, file-count, individual-file-size, parser-time, and total-job-time limits.
+- Enforce bounded quality-analysis time, document reads, finding counts, evidence items, and related paths.
 - Ignore or safely classify binary and excluded content; do not traverse symbolic links outside the workspace.
 - Retain source only temporarily and remove it on every success or failure path.
 - Persist derived metadata and reports, not full source snapshots.
@@ -94,6 +95,7 @@ The health score is an onboarding and readiness indicator, not an absolute judgm
 - Result persistence and the completed transition must be atomic and processing-token owned.
 - Clone, inventory, and workspace cleanup must not hold a database row lock or long transaction.
 - Parser failures for one supported file must be isolated and represented without crashing the entire job.
+- Unsupported README or CI encoding and bounded read failures must produce fixed warnings without persisting content or exception details.
 - Scoring rules, report schemas, and scoring versions must be documented and tested against fixed fixtures.
 - API errors and unsupported repositories must produce actionable, non-sensitive messages.
 

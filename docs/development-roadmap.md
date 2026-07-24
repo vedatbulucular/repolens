@@ -122,28 +122,33 @@ Stage 3A-2B2 connects these modules to the production worker. Inventory runs ins
 - Source bodies, snippets, literals, parser exceptions, tokens, and workspace paths never enter persisted results.
 - Source analysis runs before workspace cleanup; cleanup still precedes atomic result persistence and completion.
 
-## Stage 5 — Rule engine and deterministic scoring
+## Stage 5 — Deterministic repository-quality findings
+
+**Status:** Complete
 
 ### Scope
 
-- Define a stable rule, finding, evidence, and score-impact contract.
-- Add documentation, project-readiness, code-organization, and maintainability rules.
-- Add versioned category weights and bounded score calculation.
-- Document rule behavior and scoring rationale.
+- Define stable immutable finding, category, severity, numeric-evidence, safe-path, summary, and warning contracts.
+- Add deterministic documentation, testing, governance, automation, maintainability, and onboarding rules.
+- Include positive signals and improvement findings without calculating category or overall scores.
+- Read selected README and CI content only through bounded symlink-resistant UTF-8/UTF-8-BOM inspection and never persist that text.
+- Persist schema version 3 results while continuing to read versions 1 and 2.
+- Document thresholds, heuristic limitations, safety bounds, and future scoring inputs.
 
 ### Acceptance criteria
 
-- Every finding has a stable rule ID and concrete machine-readable evidence.
-- The same fixture and scoring version produce exactly the same findings and scores.
-- Category and total scores stay within documented bounds.
-- Rule caps prevent repeated signals from dominating a category unexpectedly.
-- Unit tests cover positive, negative, boundary, and conflicting-rule cases.
+- Every finding has a stable code, fixed safe text, category, severity, recommendation, bounded numeric evidence, and safe relative paths.
+- The same fixture produces exactly the same ordered findings and summary counters.
+- README, CI, source, exception, token, secret, command, and workspace text cannot enter the result.
+- Finding, related-path, evidence, document-read, result-size, and monotonic time limits are enforced and tested.
+- Versions 1 and 2 remain readable; version 3 requires typed source structure and quality findings.
+- Unit tests cover positive, negative, boundary, false-positive, truncation, unsafe-path, and worker failure cases.
 
-## Stage 6 — Reporting and API completion
+## Stage 6 — Scoring, reporting, and API completion
 
 ### Scope
 
-- Define the versioned final report schema.
+- Define versioned category weights, score calculation, and the final report schema.
 - Persist derived findings, scores, summaries, and exports.
 - Add completed-result and error endpoints.
 - Generate equivalent JSON and Markdown reports.
