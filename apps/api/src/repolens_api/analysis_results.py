@@ -3,6 +3,7 @@
 import json
 import math
 import unicodedata
+from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath, PureWindowsPath
@@ -13,11 +14,25 @@ from repolens_api.code_structure.contracts import (
     SourceStructureWarningCode,
 )
 from repolens_api.inventory.contracts import InventoryResult
+from repolens_api.quality_findings.contracts import (
+    QUALITY_WARNING_MESSAGES,
+    QualityCategory,
+    QualityFinding,
+    QualityFindingsResult,
+    QualitySeverity,
+    QualityWarning,
+)
+from repolens_api.quality_findings.policy import FINDING_TEXTS, POSITIVE_FINDING_CODES
 
-ANALYSIS_RESULT_SCHEMA_VERSION = 2
+ANALYSIS_RESULT_SCHEMA_VERSION = 3
+SOURCE_STRUCTURE_SCHEMA_VERSION = 2
 LEGACY_INVENTORY_SCHEMA_VERSION = 1
 SUPPORTED_RESULT_SCHEMA_VERSIONS = frozenset(
-    {LEGACY_INVENTORY_SCHEMA_VERSION, ANALYSIS_RESULT_SCHEMA_VERSION}
+    {
+        LEGACY_INVENTORY_SCHEMA_VERSION,
+        SOURCE_STRUCTURE_SCHEMA_VERSION,
+        ANALYSIS_RESULT_SCHEMA_VERSION,
+    }
 )
 
 
@@ -63,30 +78,51 @@ class SerializedInventoryResult:
 
 @dataclass(frozen=True, slots=True)
 class AnalysisOutput:
-    """Current worker output combining inventory and source structure."""
+    """Version 2 worker output combining inventory and source structure."""
 
     schema_version: int
     inventory: InventoryResult
     code_structure: CodeStructureResult
 
 
-type PersistableAnalysisResult = InventoryResult | AnalysisOutput
+@dataclass(frozen=True, slots=True)
+class QualityAnalysisOutput:
+    """Version 3 worker output including deterministic quality findings."""
+
+    schema_version: int
+    inventory: InventoryResult
+    code_structure: CodeStructureResult
+    quality_findings: QualityFindingsResult
+
+
+type PersistableAnalysisResult = InventoryResult | AnalysisOutput | QualityAnalysisOutput
 
 
 def serialize_inventory_result(result: PersistableAnalysisResult) -> dict[str, object]:
     """Convert an inventory result to an explicit JSON-compatible payload."""
     try:
         if (
-            isinstance(result, AnalysisOutput)
-            and result.schema_version != ANALYSIS_RESULT_SCHEMA_VERSION
-        ) or (
-            isinstance(result, InventoryResult)
-            and result.schema_version != LEGACY_INVENTORY_SCHEMA_VERSION
+            (
+                isinstance(result, AnalysisOutput)
+                and result.schema_version != SOURCE_STRUCTURE_SCHEMA_VERSION
+            )
+            or (
+                isinstance(result, QualityAnalysisOutput)
+                and result.schema_version != ANALYSIS_RESULT_SCHEMA_VERSION
+            )
+            or (
+                isinstance(result, InventoryResult)
+                and result.schema_version != LEGACY_INVENTORY_SCHEMA_VERSION
+            )
         ):
             raise AnalysisResultSerializationError(
                 AnalysisResultErrorCode.RESULT_SERIALIZATION_FAILED
             )
-        inventory = result.inventory if isinstance(result, AnalysisOutput) else result
+        inventory = (
+            result.inventory
+            if isinstance(result, (AnalysisOutput, QualityAnalysisOutput))
+            else result
+        )
         payload: dict[str, object] = {
             "repository_summary": {
                 "regular_file_count": inventory.repository_summary.regular_file_count,
@@ -168,8 +204,10 @@ def serialize_inventory_result(result: PersistableAnalysisResult) -> dict[str, o
                 for item in inventory.warnings
             ],
         }
-        if isinstance(result, AnalysisOutput):
+        if isinstance(result, (AnalysisOutput, QualityAnalysisOutput)):
             payload["code_structure"] = _serialize_code_structure(result.code_structure)
+        if isinstance(result, QualityAnalysisOutput):
+            payload["quality_findings"] = _serialize_quality_findings(result.quality_findings)
         _validate_json_value(payload)
     except AnalysisResultSerializationError:
         raise
@@ -222,6 +260,108 @@ def prepare_inventory_result(
         payload=payload,
         json_bytes=json_bytes,
     )
+
+
+def _serialize_quality_findings(result: QualityFindingsResult) -> dict[str, object]:
+    findings = [_serialize_quality_finding(item) for item in result.findings]
+    warnings = [_serialize_quality_warning(item) for item in result.warnings]
+    category_counts = {item.category: item.count for item in result.summary.category_counts}
+    actual_category_counts = Counter(item.category for item in result.findings)
+    actual_positive_count = sum(item.code in POSITIVE_FINDING_CODES for item in result.findings)
+    if (
+        len(category_counts) != len(result.summary.category_counts)
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in (
+                result.summary.total_finding_count,
+                result.summary.high_count,
+                result.summary.medium_count,
+                result.summary.low_count,
+                result.summary.info_count,
+                result.summary.positive_signal_count,
+                result.summary.improvement_finding_count,
+                *category_counts.values(),
+            )
+        )
+        or result.summary.total_finding_count != len(result.findings)
+        or category_counts != actual_category_counts
+        or result.summary.high_count
+        != sum(item.severity is QualitySeverity.HIGH for item in result.findings)
+        or result.summary.medium_count
+        != sum(item.severity is QualitySeverity.MEDIUM for item in result.findings)
+        or result.summary.low_count
+        != sum(item.severity is QualitySeverity.LOW for item in result.findings)
+        or result.summary.info_count
+        != sum(item.severity is QualitySeverity.INFO for item in result.findings)
+        or result.summary.positive_signal_count != actual_positive_count
+        or result.summary.improvement_finding_count != len(result.findings) - actual_positive_count
+    ):
+        raise AnalysisResultSerializationError(AnalysisResultErrorCode.RESULT_SERIALIZATION_FAILED)
+    return {
+        "summary": {
+            "total_finding_count": result.summary.total_finding_count,
+            "high_count": result.summary.high_count,
+            "medium_count": result.summary.medium_count,
+            "low_count": result.summary.low_count,
+            "info_count": result.summary.info_count,
+            "category_counts": [
+                {"category": category.value, "count": category_counts[category]}
+                for category in QualityCategory
+                if category in category_counts
+            ],
+            "positive_signal_count": result.summary.positive_signal_count,
+            "improvement_finding_count": result.summary.improvement_finding_count,
+        },
+        "findings": findings,
+        "warnings": warnings,
+    }
+
+
+def _serialize_quality_finding(finding: QualityFinding) -> dict[str, object]:
+    expected = FINDING_TEXTS.get(finding.code)
+    if (
+        expected is None
+        or finding.category is not expected.category
+        or finding.severity is not expected.severity
+        or finding.title != expected.title
+        or finding.message != expected.message
+        or finding.recommendation != expected.recommendation
+    ):
+        raise AnalysisResultSerializationError(AnalysisResultErrorCode.RESULT_SERIALIZATION_FAILED)
+    return {
+        "code": finding.code.value,
+        "category": finding.category.value,
+        "severity": finding.severity.value,
+        "title": _safe_text(finding.title),
+        "message": _safe_text(finding.message, maximum=1_024),
+        "recommendation": _safe_text(finding.recommendation, maximum=1_024),
+        "evidence": [
+            {
+                "kind": item.kind.value,
+                "value": _nonnegative_integer(item.value),
+            }
+            for item in finding.evidence
+        ],
+        "related_paths": [_relative_path(path) for path in finding.related_paths],
+    }
+
+
+def _serialize_quality_warning(warning: QualityWarning) -> dict[str, object]:
+    if QUALITY_WARNING_MESSAGES.get(warning.code) != warning.message:
+        raise AnalysisResultSerializationError(AnalysisResultErrorCode.RESULT_SERIALIZATION_FAILED)
+    return {
+        "code": warning.code.value,
+        "relative_path": (
+            _relative_path(warning.relative_path) if warning.relative_path is not None else None
+        ),
+        "message": _safe_text(warning.message, maximum=1_024),
+    }
+
+
+def _nonnegative_integer(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise AnalysisResultSerializationError(AnalysisResultErrorCode.RESULT_SERIALIZATION_FAILED)
+    return value
 
 
 def _serialize_code_structure(result: CodeStructureResult) -> dict[str, object]:

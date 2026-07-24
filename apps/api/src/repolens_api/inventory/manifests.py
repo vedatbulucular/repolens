@@ -246,7 +246,7 @@ def _parse_package_json(
     flags: set[str] = set()
     scripts = _mapping(root.get("scripts"))
     if scripts is not None:
-        for script_name in ("start", "dev", "serve"):
+        for script_name in ("start", "dev", "serve", "test"):
             if script_name in scripts:
                 flags.add(f"has_{script_name}_script")
 

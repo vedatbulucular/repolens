@@ -1,15 +1,32 @@
 """HTTP request and response models exposed by the API."""
 
+from collections import Counter
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, model_validator
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    model_validator,
+)
 
 from repolens_api.code_structure.contracts import (
     SOURCE_STRUCTURE_WARNING_MESSAGES,
     SourceStructureWarningCode,
 )
+from repolens_api.quality_findings.contracts import (
+    QUALITY_WARNING_MESSAGES,
+    QualityCategory,
+    QualityEvidenceKind,
+    QualityFindingCode,
+    QualitySeverity,
+    QualityWarningCode,
+)
+from repolens_api.quality_findings.policy import FINDING_TEXTS, POSITIVE_FINDING_CODES
 
 
 def _relative_path(value: str) -> str:
@@ -26,6 +43,7 @@ def _relative_path(value: str) -> str:
 
 
 RelativePath = Annotated[str, AfterValidator(_relative_path)]
+NonNegativeInt = Annotated[int, Field(ge=0)]
 
 
 class HealthResponse(BaseModel):
@@ -271,6 +289,119 @@ class InventoryPayloadV2Response(InventoryPayloadResponse):
     code_structure: CodeStructureResponse
 
 
+class QualityEvidenceResponse(InventoryPayloadModel):
+    """Typed bounded numeric evidence for one quality finding."""
+
+    kind: QualityEvidenceKind
+    value: NonNegativeInt
+
+
+class QualityFindingResponse(InventoryPayloadModel):
+    """Typed deterministic finding with fixed public text."""
+
+    code: QualityFindingCode
+    category: QualityCategory
+    severity: QualitySeverity
+    title: str
+    message: str
+    recommendation: str
+    evidence: list[QualityEvidenceResponse]
+    related_paths: list[RelativePath]
+
+    @model_validator(mode="after")
+    def validate_fixed_metadata(self) -> "QualityFindingResponse":
+        """Reject stored text or classifications outside the fixed rule contract."""
+        expected = FINDING_TEXTS[self.code]
+        if (
+            self.category is not expected.category
+            or self.severity is not expected.severity
+            or self.title != expected.title
+            or self.message != expected.message
+            or self.recommendation != expected.recommendation
+        ):
+            raise ValueError("invalid quality finding metadata")
+        return self
+
+
+class QualityCategoryCountResponse(InventoryPayloadModel):
+    """Finding count for one quality category."""
+
+    category: QualityCategory
+    count: NonNegativeInt
+
+
+class QualitySummaryResponse(InventoryPayloadModel):
+    """Typed quality-finding counters without a score."""
+
+    total_finding_count: NonNegativeInt
+    high_count: NonNegativeInt
+    medium_count: NonNegativeInt
+    low_count: NonNegativeInt
+    info_count: NonNegativeInt
+    category_counts: list[QualityCategoryCountResponse]
+    positive_signal_count: NonNegativeInt
+    improvement_finding_count: NonNegativeInt
+
+
+class QualityWarningResponse(InventoryPayloadModel):
+    """Typed safe quality-analysis warning."""
+
+    code: QualityWarningCode
+    relative_path: RelativePath | None
+    message: str
+
+    @model_validator(mode="after")
+    def validate_fixed_message(self) -> "QualityWarningResponse":
+        """Reject document contents and exception text in stored warnings."""
+        if self.message != QUALITY_WARNING_MESSAGES[self.code]:
+            raise ValueError("invalid quality warning message")
+        return self
+
+
+class QualityFindingsResponse(InventoryPayloadModel):
+    """Strict persisted repository-quality payload."""
+
+    summary: QualitySummaryResponse
+    findings: list[QualityFindingResponse]
+    warnings: list[QualityWarningResponse]
+
+    @model_validator(mode="after")
+    def validate_summary_and_uniqueness(self) -> "QualityFindingsResponse":
+        """Reject inconsistent counters and duplicate persisted findings."""
+        severity_counts = Counter(item.severity for item in self.findings)
+        category_counts = Counter(item.category for item in self.findings)
+        stored_categories = {item.category: item.count for item in self.summary.category_counts}
+        positive_count = sum(item.code in POSITIVE_FINDING_CODES for item in self.findings)
+        keys = {
+            (
+                item.code,
+                tuple((evidence.kind, evidence.value) for evidence in item.evidence),
+                tuple(item.related_paths),
+            )
+            for item in self.findings
+        }
+        if (
+            len(stored_categories) != len(self.summary.category_counts)
+            or stored_categories != category_counts
+            or len(keys) != len(self.findings)
+            or self.summary.total_finding_count != len(self.findings)
+            or self.summary.high_count != severity_counts[QualitySeverity.HIGH]
+            or self.summary.medium_count != severity_counts[QualitySeverity.MEDIUM]
+            or self.summary.low_count != severity_counts[QualitySeverity.LOW]
+            or self.summary.info_count != severity_counts[QualitySeverity.INFO]
+            or self.summary.positive_signal_count != positive_count
+            or self.summary.improvement_finding_count != len(self.findings) - positive_count
+        ):
+            raise ValueError("invalid quality findings summary")
+        return self
+
+
+class InventoryPayloadV3Response(InventoryPayloadV2Response):
+    """Strict schema for version 3 quality findings."""
+
+    quality_findings: QualityFindingsResponse
+
+
 class AnalysisResultResponse(InventoryPayloadResponse):
     """Completed analysis result with lifecycle and repository metadata."""
 
@@ -278,6 +409,7 @@ class AnalysisResultResponse(InventoryPayloadResponse):
     result_schema_version: int
     repository: RepositoryResponse
     code_structure: CodeStructureResponse | None = None
+    quality_findings: QualityFindingsResponse | None = None
     requested_at: AwareDatetime
     started_at: AwareDatetime | None
     completed_at: AwareDatetime | None

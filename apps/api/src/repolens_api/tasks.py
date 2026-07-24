@@ -15,10 +15,10 @@ from repolens_api.acquisition.service import RepositoryAcquisitionService
 from repolens_api.acquisition.workspace import WorkspaceManager
 from repolens_api.analysis_results import (
     ANALYSIS_RESULT_SCHEMA_VERSION,
-    AnalysisOutput,
     AnalysisResultPersistenceError,
     AnalysisResultSerializationError,
     PersistableAnalysisResult,
+    QualityAnalysisOutput,
 )
 from repolens_api.celery_app import celery_app
 from repolens_api.code_structure.errors import SourceStructureError
@@ -27,6 +27,8 @@ from repolens_api.database import create_engine, session_factory
 from repolens_api.inventory.content import SafeContentReader
 from repolens_api.inventory.errors import InventoryError, RepositoryAnalysisFailed
 from repolens_api.inventory.service import InventoryService
+from repolens_api.quality_findings.errors import QualityAnalysisError
+from repolens_api.quality_findings.service import QualityFindingsService
 from repolens_api.repository_urls import InvalidRepositoryUrl, parse_repository_url
 from repolens_api.services import (
     claim_analysis_for_processing,
@@ -69,16 +71,29 @@ async def _analyze_repository(
         settings.source_structure_limits(),
         content_reader=content_reader,
     )
+    quality_findings = QualityFindingsService(
+        settings.quality_limits(),
+        content_reader=content_reader,
+    )
     async with acquisition.acquire_workspace(analysis_id, canonical_url) as repository_root:
         inventory_analysis = inventory.analyze_with_files(repository_root)
         structure_result = code_structure.analyze(
             repository_root,
             inventory_analysis.files,
         )
-        return AnalysisOutput(
+        quality_result = quality_findings.analyze(
+            repository_root,
+            inventory=inventory_analysis.result,
+            files=inventory_analysis.files,
+            directories=inventory_analysis.directories,
+            manifests=inventory_analysis.manifest_facts,
+            structure=structure_result,
+        )
+        return QualityAnalysisOutput(
             schema_version=ANALYSIS_RESULT_SCHEMA_VERSION,
             inventory=inventory_analysis.result,
             code_structure=structure_result,
+            quality_findings=quality_result,
         )
 
 
@@ -107,7 +122,12 @@ async def process_analysis(
         if identity.canonical_url != claim.repository.canonical_url:
             raise AcquisitionError
         inventory_result = await work(claim.id, claim.repository.canonical_url)
-    except (AcquisitionError, InventoryError, SourceStructureError) as exc:
+    except (
+        AcquisitionError,
+        InventoryError,
+        SourceStructureError,
+        QualityAnalysisError,
+    ) as exc:
         await _record_failure(
             sessions,
             analysis_id,

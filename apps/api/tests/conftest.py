@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from repolens_api.analysis_results import AnalysisOutput
+from repolens_api.analysis_results import AnalysisOutput, QualityAnalysisOutput
 from repolens_api.api import get_analysis_dispatcher
 from repolens_api.code_structure.contracts import (
     CodeStructureResult,
@@ -47,6 +47,17 @@ from repolens_api.inventory.contracts import (
 )
 from repolens_api.main import app
 from repolens_api.models import Base
+from repolens_api.quality_findings.contracts import (
+    QualityCategory,
+    QualityCategoryCount,
+    QualityEvidence,
+    QualityEvidenceKind,
+    QualityFinding,
+    QualityFindingCode,
+    QualityFindingsResult,
+    QualitySummary,
+)
+from repolens_api.quality_findings.policy import FINDING_TEXTS
 
 
 async def _create_schema(engine: AsyncEngine) -> None:
@@ -217,6 +228,56 @@ def analysis_output(
         schema_version=2,
         inventory=inventory_result,
         code_structure=code_structure_result,
+    )
+
+
+@pytest.fixture
+def quality_findings_result() -> QualityFindingsResult:
+    """Return one fixed-text deterministic quality result."""
+    text = FINDING_TEXTS[QualityFindingCode.DOCUMENTATION_PRESENT]
+    finding = QualityFinding(
+        code=QualityFindingCode.DOCUMENTATION_PRESENT,
+        category=text.category,
+        severity=text.severity,
+        title=text.title,
+        message=text.message,
+        recommendation=text.recommendation,
+        evidence=(QualityEvidence(kind=QualityEvidenceKind.FILE_COUNT, value=1),),
+        related_paths=("README.md",),
+    )
+    return QualityFindingsResult(
+        summary=QualitySummary(
+            total_finding_count=1,
+            high_count=0,
+            medium_count=0,
+            low_count=0,
+            info_count=1,
+            category_counts=(
+                QualityCategoryCount(
+                    category=QualityCategory.DOCUMENTATION,
+                    count=1,
+                ),
+            ),
+            positive_signal_count=1,
+            improvement_finding_count=0,
+        ),
+        findings=(finding,),
+        warnings=(),
+    )
+
+
+@pytest.fixture
+def quality_analysis_output(
+    inventory_result: InventoryResult,
+    code_structure_result: CodeStructureResult,
+    quality_findings_result: QualityFindingsResult,
+) -> QualityAnalysisOutput:
+    """Return the current version 3 persisted worker output."""
+    return QualityAnalysisOutput(
+        schema_version=3,
+        inventory=inventory_result,
+        code_structure=code_structure_result,
+        quality_findings=quality_findings_result,
     )
 
 

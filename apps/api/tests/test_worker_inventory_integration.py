@@ -16,9 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from repolens_api import tasks
 from repolens_api.analysis_results import (
-    AnalysisOutput,
     AnalysisResultPersistenceError,
     PersistableAnalysisResult,
+    QualityAnalysisOutput,
 )
 from repolens_api.code_structure.contracts import CodeStructureResult, SourceStructureLimits
 from repolens_api.code_structure.errors import (
@@ -38,6 +38,14 @@ from repolens_api.inventory.errors import (
 )
 from repolens_api.inventory.service import InventoryAnalysis
 from repolens_api.models import Analysis, AnalysisResult, AnalysisStatus, Repository
+from repolens_api.quality_findings.contracts import QualityFindingsResult, QualityLimits
+from repolens_api.quality_findings.errors import (
+    QualityAnalysisError,
+    QualityAnalysisFailed,
+    QualityAnalysisLimitExceeded,
+    QualityAnalysisTimeout,
+    UnsafeQualityPath,
+)
 from repolens_api.settings import Settings
 from repolens_api.tasks import process_analysis
 
@@ -92,11 +100,13 @@ def test_production_work_keeps_repository_until_inventory_then_cleans(
     tmp_path: Path,
     inventory_result: InventoryResult,
     code_structure_result: CodeStructureResult,
+    quality_findings_result: QualityFindingsResult,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
     observed_limits: list[InventoryLimits] = []
     observed_structure_limits: list[SourceStructureLimits] = []
+    observed_quality_limits: list[QualityLimits] = []
     repository_root = tmp_path / "repository"
 
     class FixtureAcquisitionService:
@@ -142,9 +152,30 @@ def test_production_work_keeps_repository_until_inventory_then_cleans(
             events.append("structure")
             return code_structure_result
 
+    class FixtureQualityFindingsService:
+        def __init__(self, limits: QualityLimits, **_kwargs: object) -> None:
+            observed_quality_limits.append(limits)
+
+        def analyze(
+            self,
+            received_root: Path,
+            **kwargs: object,
+        ) -> QualityFindingsResult:
+            assert received_root == repository_root
+            assert repository_root.is_dir()
+            assert kwargs["inventory"] is inventory_result
+            assert kwargs["structure"] is code_structure_result
+            events.append("quality")
+            return quality_findings_result
+
     monkeypatch.setattr(tasks, "RepositoryAcquisitionService", FixtureAcquisitionService)
     monkeypatch.setattr(tasks, "InventoryService", FixtureInventoryService)
     monkeypatch.setattr(tasks, "CodeStructureService", FixtureCodeStructureService)
+    monkeypatch.setattr(
+        tasks,
+        "QualityFindingsService",
+        FixtureQualityFindingsService,
+    )
 
     result = asyncio.run(
         tasks._analyze_repository(
@@ -153,13 +184,15 @@ def test_production_work_keeps_repository_until_inventory_then_cleans(
         )
     )
 
-    assert isinstance(result, AnalysisOutput)
-    assert result.schema_version == 2
+    assert isinstance(result, QualityAnalysisOutput)
+    assert result.schema_version == 3
     assert result.inventory is inventory_result
     assert result.code_structure is code_structure_result
-    assert events == ["acquired", "inventory", "structure", "cleanup"]
+    assert result.quality_findings is quality_findings_result
+    assert events == ["acquired", "inventory", "structure", "quality", "cleanup"]
     assert observed_limits == [Settings().inventory_limits()]
     assert observed_structure_limits == [Settings().source_structure_limits()]
+    assert observed_quality_limits == [Settings().quality_limits()]
     assert not repository_root.exists()
 
 
@@ -174,11 +207,15 @@ def test_production_work_keeps_repository_until_inventory_then_cleans(
         (SourceStructureLimitExceeded(), "source_structure_limit_exceeded"),
         (SourceStructureTimeout(), "source_structure_timeout"),
         (UnsafeSourcePath(), "unsafe_source_path"),
+        (QualityAnalysisFailed(), "quality_analysis_failed"),
+        (QualityAnalysisLimitExceeded(), "quality_analysis_limit_exceeded"),
+        (QualityAnalysisTimeout(), "quality_analysis_timeout"),
+        (UnsafeQualityPath(), "unsafe_quality_path"),
     ],
 )
 def test_worker_records_safe_fatal_analysis_errors_without_result(
     test_sessions: async_sessionmaker[AsyncSession],
-    failure: InventoryError | SourceStructureError,
+    failure: InventoryError | SourceStructureError | QualityAnalysisError,
     expected_code: str,
 ) -> None:
     analysis = asyncio.run(_create_analysis(test_sessions))
@@ -414,12 +451,12 @@ def test_commit_redelivery_is_noop_and_keeps_single_result(
 def test_real_worker_result_is_available_through_typed_endpoint(
     api_client: TestClient,
     test_sessions: async_sessionmaker[AsyncSession],
-    analysis_output: AnalysisOutput,
+    quality_analysis_output: QualityAnalysisOutput,
 ) -> None:
     analysis = asyncio.run(_create_analysis(test_sessions))
 
     async def analyze(_analysis_id: UUID, _canonical_url: str) -> PersistableAnalysisResult:
-        return analysis_output
+        return quality_analysis_output
 
     asyncio.run(
         process_analysis(
@@ -440,9 +477,11 @@ def test_real_worker_result_is_available_through_typed_endpoint(
     assert body["technologies"][0]["name"] == "FastAPI"
     assert body["entry_points"][0]["relative_path"] == "src/main.py"
     assert body["warnings"][0]["code"] == "file_unreadable"
-    assert body["result_schema_version"] == 2
+    assert body["result_schema_version"] == 3
     assert body["code_structure"]["symbols"][0]["name"] == "create_app"
     assert body["code_structure"]["imports"][0]["module"] == "fastapi"
+    assert body["quality_findings"]["summary"]["total_finding_count"] == 1
+    assert body["quality_findings"]["findings"][0]["code"] == "documentation_present"
     for forbidden in (
         "delivery-owner",
         "/tmp/repolens-workspaces",

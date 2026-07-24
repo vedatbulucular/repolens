@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from repolens_api.acquisition.contracts import AcquisitionLimits
 from repolens_api.code_structure.contracts import SourceStructureLimits
 from repolens_api.inventory.contracts import InventoryLimits
+from repolens_api.quality_findings.contracts import QualityLimits
 
 
 class Settings(BaseSettings):
@@ -55,6 +56,11 @@ class Settings(BaseSettings):
     max_imports_per_file: int = 500
     max_imported_names_per_import: int = 100
     max_structure_warnings: int = 500
+    quality_analysis_timeout_seconds: int = 15
+    max_quality_findings: int = 500
+    max_quality_related_paths: int = 20
+    max_quality_evidence_items: int = 20
+    max_document_read_bytes: int = 262_144
     max_result_bytes: int = 2_097_152
 
     @model_validator(mode="after")
@@ -131,6 +137,18 @@ class Settings(BaseSettings):
             raise ValueError("per-file symbol limit cannot exceed total symbol limit")
         if self.max_imports_per_file > self.max_source_imports:
             raise ValueError("per-file import limit cannot exceed total import limit")
+
+        quality_limits = (
+            self.quality_analysis_timeout_seconds,
+            self.max_quality_findings,
+            self.max_quality_related_paths,
+            self.max_quality_evidence_items,
+            self.max_document_read_bytes,
+        )
+        if any(limit <= 0 for limit in quality_limits):
+            raise ValueError("quality analysis limits must be positive")
+        if self.max_document_read_bytes > self.max_file_bytes:
+            raise ValueError("quality document read limit cannot exceed acquisition file limit")
         if self.max_result_bytes <= 0:
             raise ValueError("result byte limit must be positive")
         return self
@@ -177,6 +195,16 @@ class Settings(BaseSettings):
             max_imports_per_file=self.max_imports_per_file,
             max_imported_names_per_import=self.max_imported_names_per_import,
             max_warnings=self.max_structure_warnings,
+        )
+
+    def quality_limits(self) -> QualityLimits:
+        """Return the immutable limits used by repository-quality analysis."""
+        return QualityLimits(
+            timeout_seconds=self.quality_analysis_timeout_seconds,
+            max_findings=self.max_quality_findings,
+            max_related_paths=self.max_quality_related_paths,
+            max_evidence_items=self.max_quality_evidence_items,
+            max_document_read_bytes=self.max_document_read_bytes,
         )
 
 

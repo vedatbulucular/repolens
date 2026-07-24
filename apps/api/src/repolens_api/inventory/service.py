@@ -13,6 +13,7 @@ from repolens_api.inventory.contracts import (
     InventoryResult,
     InventoryWarning,
     InventoryWarningCode,
+    ManifestFact,
     RepositorySummary,
 )
 from repolens_api.inventory.entrypoints import detect_entry_points
@@ -33,6 +34,8 @@ class InventoryAnalysis:
 
     result: InventoryResult
     files: tuple[FileInventoryEntry, ...]
+    directories: tuple[str, ...] = ()
+    manifest_facts: tuple[ManifestFact, ...] = ()
 
 
 class InventoryService:
@@ -113,6 +116,8 @@ class InventoryService:
                     warnings=warnings,
                 ),
                 files=categorized_files,
+                directories=scan.directories,
+                manifest_facts=manifests.facts,
             )
         except InventoryError:
             raise

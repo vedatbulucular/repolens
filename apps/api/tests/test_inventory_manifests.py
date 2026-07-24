@@ -53,7 +53,7 @@ def test_package_json_extracts_only_names_flags_and_safe_main(
     fact = _fact(extraction, "package_json")
 
     assert fact.names == ("express", "next", "react", "vue")
-    assert fact.metadata_flags == ("has_start_script",)
+    assert fact.metadata_flags == ("has_start_script", "has_test_script")
     assert tuple((item.kind, item.relative_path) for item in fact.relative_paths) == (
         ("node_main", "dist/index.js"),
     )
